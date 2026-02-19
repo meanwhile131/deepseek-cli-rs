@@ -23,8 +23,8 @@ async fn main() -> Result<()> {
     let mut lines = stdin.lines();
 
     loop {
-        print!("> ");
-        io::stdout().flush().await?;
+        eprint!("> ");
+        io::stderr().flush().await?;
         let line = match lines.next_line().await? {
             Some(l) => l,
             None => break,

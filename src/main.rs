@@ -2,7 +2,7 @@ use anyhow::Result;
 use deepseek_api::{DeepSeekAPI, StreamChunk};
 use futures_util::{pin_mut, StreamExt};
 use std::env;
-use tokio::io::{self, AsyncBufReadExt, BufReader};
+use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 mod tools;
 use tools::SYSTEM_PROMPT;
@@ -22,7 +22,13 @@ async fn main() -> Result<()> {
     let stdin = BufReader::new(io::stdin());
     let mut lines = stdin.lines();
 
-    while let Some(line) = lines.next_line().await? {
+    loop {
+        print!("> ");
+        io::stdout().flush().await?;
+        let line = match lines.next_line().await? {
+            Some(l) => l,
+            None => break,
+        };
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;

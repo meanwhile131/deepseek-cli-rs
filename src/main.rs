@@ -207,7 +207,7 @@ async fn main() -> Result<()> {
                                 output.clone() // already concise
                             }
                             "run_command" => {
-                                format!("Executed command (see result)")
+                                "Executed command (see result)".to_string()
                             }
                             _ => format!("Executed tool: {}", tool_name),
                         };

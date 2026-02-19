@@ -20,11 +20,7 @@ To use a tool, output a line starting with "TOOL:" followed by the tool name and
   The search must match exactly.
 - run_command <command_string>                     : runs a shell command (using sh -c) and returns its stdout/stderr. Use with caution.
 
-After using a tool, you will receive the result in the next user message.
-You can then continue the conversation or use another tool.
-When you have the final answer, just output it normally without any "TOOL:" line.
-
-IMPORTANT: The tool-calling loop requires explicit exit. When you are done using tools and want to provide your final answer, you MUST type "/exit" or "exit" on its own line to exit the tool loop. Otherwise, the system will continue to wait for more tool requests.
+When you want to show output to the user without calling any tools, you must specify /exit or exit on a new line at the end of your message.
 "#;
 
 pub async fn execute_tool(name: &str, arg: &str) -> Result<String> {

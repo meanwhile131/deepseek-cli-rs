@@ -1,12 +1,53 @@
 use anyhow::Result;
-use deepseek_api::{DeepSeekAPI, StreamChunk};
-use futures_util::{pin_mut, StreamExt};
+use deepseek_api::{DeepSeekAPI, StreamChunk, models::Message};
+use futures_util::{pin_mut, StreamExt, Stream};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use std::env;
 use std::io::Write;
 mod tools;
 use tools::SYSTEM_PROMPT;
 use colored::*;
+
+async fn handle_stream<S>(stream: S) -> Result<Option<Message>>
+where
+    S: Stream<Item = Result<StreamChunk>>,
+{
+    pin_mut!(stream);
+    let mut final_message = None;
+    let mut thinking_started = false;
+    let mut content_started = false;
+    while let Some(chunk) = stream.next().await {
+        match chunk? {
+            StreamChunk::Thinking(thought) => {
+                if !thinking_started {
+                    println!("{}", "--- Thinking ---".yellow());
+                    thinking_started = true;
+                }
+                print!("{}", thought.dimmed());
+                std::io::stdout().flush()?;
+            }
+            StreamChunk::Content(text) => {
+                if !content_started {
+                    if thinking_started {
+                        println!("\n{}", "--- End of thinking ---".yellow());
+                    }
+                    println!("{}", "--- Response ---".green());
+                    content_started = true;
+                }
+                print!("{}", text.bright_white());
+                std::io::stdout().flush()?;
+            }
+            StreamChunk::Message(msg) => {
+                if thinking_started && !content_started {
+                    println!("\n{}", "--- End of thinking ---".yellow());
+                }
+                final_message = Some(msg);
+                println!(); // newline after content
+            }
+        }
+    }
+    Ok(final_message)
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -53,42 +94,7 @@ async fn main() -> Result<()> {
             true, // search
             true, // thinking
         );
-        pin_mut!(stream);
-
-        let mut final_message = None;
-        let mut thinking_started = false;
-        let mut content_started = false;
-        while let Some(chunk) = stream.next().await {
-            match chunk? {
-                StreamChunk::Thinking(thought) => {
-                    if !thinking_started {
-                        println!("{}", "--- Thinking ---".yellow());
-                        thinking_started = true;
-                    }
-                    print!("{}", thought.dimmed());
-                    std::io::stdout().flush()?;
-                }
-                StreamChunk::Content(text) => {
-                    if !content_started {
-                        if thinking_started {
-                            println!("\n{}", "--- End of thinking ---".yellow());
-                        }
-                        println!("{}", "--- Response ---".green());
-                        content_started = true;
-                    }
-                    print!("{}", text.bright_white());
-                    std::io::stdout().flush()?;
-                }
-                StreamChunk::Message(msg) => {
-                    if thinking_started && !content_started {
-                        println!("\n{}", "--- End of thinking ---".yellow());
-                    }
-                    final_message = Some(msg);
-                    println!(); // newline after content
-                }
-            }
-        }
-
+        let final_message = handle_stream(stream).await?;
         let mut current_msg = match final_message {
             Some(msg) => msg,
             None => {
@@ -158,42 +164,7 @@ async fn main() -> Result<()> {
                 true, // search
                 true, // thinking
             );
-            pin_mut!(stream2);
-
-            let mut final_msg2 = None;
-            let mut thinking_started = false;
-            let mut content_started = false;
-            while let Some(chunk) = stream2.next().await {
-                match chunk? {
-                    StreamChunk::Thinking(thought) => {
-                        if !thinking_started {
-                            println!("{}", "--- Thinking ---".yellow());
-                            thinking_started = true;
-                        }
-                        print!("{}", thought.dimmed());
-                    }
-                    StreamChunk::Content(text) => {
-                        if !content_started {
-                            if thinking_started {
-                                println!("\n{}", "--- End of thinking ---".yellow());
-                            }
-                            println!("{}", "--- Response ---".green());
-                            content_started = true;
-                        }
-                        print!("{}", text.bright_white());
-                        std::io::stdout().flush()?;
-                    }
-                    StreamChunk::Message(msg) => {
-                        if thinking_started && !content_started {
-                            println!("\n{}", "--- End of thinking ---".yellow());
-                        }
-                        final_msg2 = Some(msg);
-                        println!();
-                    }
-                }
-            }
-
-            if let Some(msg) = final_msg2 {
+            if let Some(msg) = handle_stream(stream2).await? {
                 current_msg = msg;
                 parent_id = current_msg.message_id;
             } else {

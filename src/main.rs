@@ -1,8 +1,10 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use deepseek_api::{DeepSeekAPI, StreamChunk, models::Message};
 use futures_util::{Stream, StreamExt, pin_mut};
 use std::env;
 use std::io::Write;
+
+use tokio::fs;
 
 mod tools;
 use colored::*;
@@ -51,10 +53,40 @@ where
     Ok(final_message)
 }
 
+async fn load_token() -> Result<String> {
+    // Try environment variable first
+    if let Ok(token) = env::var("DEEPSEEK_TOKEN") {
+        return Ok(token);
+    }
+
+    // Try config file locations
+    let paths = [
+        dirs::config_dir().map(|d| d.join("deepseek-cli/token")),
+        dirs::home_dir().map(|h| h.join(".deepseek_token")),
+    ];
+
+    for path_opt in paths.iter().flatten() {
+        if path_opt.exists() {
+            let content = fs::read_to_string(path_opt).await?;
+            let token = content.trim().to_string();
+            if !token.is_empty() {
+                println!("Loaded token from {}", path_opt.display());
+                return Ok(token);
+            }
+        }
+    }
+
+    Err(anyhow!(
+        "DEEPSEEK_TOKEN environment variable not set and no token file found in:\n\
+         - ~/.config/deepseek-cli/token\n\
+         - ~/.deepseek_token\n\
+         Please create one with your API token."
+    ))
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    let token =
-        env::var("DEEPSEEK_TOKEN").expect("DEEPSEEK_TOKEN environment variable must be set");
+    let token = load_token().await?;
 
     let api = DeepSeekAPI::new(token).await?;
 

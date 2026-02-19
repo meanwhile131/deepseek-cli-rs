@@ -104,9 +104,9 @@ async fn main() -> Result<()> {
 
             while i < lines.len() {
                 let line = lines[i].trim();
-                if line.starts_with("TOOL:") {
+                if let Some(stripped) = line.strip_prefix("TOOL:") {
                     // Found a tool invocation start
-                    let tool_line = &line[5..].trim(); // after "TOOL:"
+                    let tool_line = stripped.trim(); // after "TOOL:"
                     // Split tool_line into name and optional first argument
                     let mut tool_parts = tool_line.splitn(2, ' ');
                     let tool_name = tool_parts.next().unwrap_or("").to_string();

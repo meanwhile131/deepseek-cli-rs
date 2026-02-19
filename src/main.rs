@@ -96,9 +96,7 @@ async fn main() -> Result<()> {
         parent_id = current_msg.message_id;
 
         // Automatic tool‑calling loop
-        let mut tool_iterations = 0;
-        const MAX_TOOL_ITER: usize = 5;
-        while tool_iterations < MAX_TOOL_ITER {
+        loop {
             let tool_lines: Vec<&str> = current_msg.content
                 .lines()
                 .filter(|l| l.trim().starts_with("TOOL:"))
@@ -157,6 +155,8 @@ async fn main() -> Result<()> {
                             content_started = true;
                         }
                         print!("{}", text);
+                        io::stdout().flush().await?;
+                    io::stdout().flush().await?;
                     }
                     StreamChunk::Message(msg) => {
                         if thinking_started && !content_started {
@@ -174,11 +174,6 @@ async fn main() -> Result<()> {
             } else {
                 break;
             }
-            tool_iterations += 1;
-        }
-
-        if tool_iterations == MAX_TOOL_ITER {
-            eprintln!("Reached maximum tool iterations.");
         }
     }
 

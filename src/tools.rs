@@ -8,33 +8,12 @@ use tokio::fs;
 use tokio::process::Command;
 
 // Tool handler: a function that takes a string argument and returns a boxed future.
-// The future may capture the lifetime of the argument, so we use a higher-ranked bound.
-type ToolHandler = for<'a> fn(&'a str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>>;
+// We use a trait object to allow closures.
+type ToolHandler = Box<dyn for<'a> Fn(&'a str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>> + Send + Sync>;
 
 struct Tool {
     description: &'static str,
     handler: ToolHandler,
-}
-
-// Wrapper functions that call the async handlers and box the resulting future.
-fn list_files_wrapper(s: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
-    Box::pin(list_files_handler(s))
-}
-
-fn read_file_wrapper(s: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
-    Box::pin(read_file_handler(s))
-}
-
-fn create_directory_wrapper(s: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
-    Box::pin(create_directory_handler(s))
-}
-
-fn apply_search_replace_wrapper(s: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
-    Box::pin(apply_search_replace_handler(s))
-}
-
-fn run_command_wrapper(s: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
-    Box::pin(run_command_handler(s))
 }
 
 // Tool implementations (async functions that take &str and return Result<String>)
@@ -141,35 +120,35 @@ static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
         "list_files",
         Tool {
             description: "list_files <directory> : lists all files and directories in the given directory (non‑recursive)",
-            handler: list_files_wrapper,
+            handler: Box::new(|s| Box::pin(list_files_handler(s))),
         },
     );
     m.insert(
         "read_file",
         Tool {
             description: "read_file <file_path> : outputs the text contents of a file",
-            handler: read_file_wrapper,
+            handler: Box::new(|s| Box::pin(read_file_handler(s))),
         },
     );
     m.insert(
         "create_directory",
         Tool {
             description: "create_directory <dir> : creates a directory (and any missing parents)",
-            handler: create_directory_wrapper,
+            handler: Box::new(|s| Box::pin(create_directory_handler(s))),
         },
     );
     m.insert(
         "apply_search_replace",
         Tool {
             description: "apply_search_replace <file_path> : applies one or more search/replace blocks to a file.\n  The blocks must be placed on the lines following the tool line, using the markers:\n      <<<<<<< SEARCH\n      (text to search for)\n      =======\n      (replacement text)\n      >>>>>>> REPLACE\n  Multiple blocks can be concatenated; each will be applied sequentially.\n  The search must match exactly, including whitespace and indentation.",
-            handler: apply_search_replace_wrapper,
+            handler: Box::new(|s| Box::pin(apply_search_replace_handler(s))),
         },
     );
     m.insert(
         "run_command",
         Tool {
             description: "run_command <command_string> : runs a shell command (using sh -c) and returns its stdout/stderr. Use with caution.",
-            handler: run_command_wrapper,
+            handler: Box::new(|s| Box::pin(run_command_handler(s))),
         },
     );
     m

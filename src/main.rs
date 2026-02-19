@@ -1,12 +1,12 @@
 use anyhow::Result;
 use deepseek_api::{DeepSeekAPI, StreamChunk, models::Message};
-use futures_util::{pin_mut, StreamExt, Stream};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use futures_util::{Stream, StreamExt, pin_mut};
 use std::env;
 use std::io::Write;
+use tokio::io::{AsyncBufReadExt, BufReader};
 mod tools;
-use tools::SYSTEM_PROMPT;
 use colored::*;
+use tools::SYSTEM_PROMPT;
 
 async fn handle_stream<S>(stream: S) -> Result<Option<Message>>
 where
@@ -51,8 +51,8 @@ where
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let token = env::var("DEEPSEEK_TOKEN")
-        .expect("DEEPSEEK_TOKEN environment variable must be set");
+    let token =
+        env::var("DEEPSEEK_TOKEN").expect("DEEPSEEK_TOKEN environment variable must be set");
 
     let api = DeepSeekAPI::new(token).await?;
     let chat = api.create_chat().await?;
@@ -113,14 +113,14 @@ async fn main() -> Result<()> {
 
             while i < lines.len() {
                 let line = lines[i].trim();
-                
+
                 // Check for explicit exit command
                 if line == "/exit" || line == "exit" {
                     explicit_exit = true;
                     i += 1;
                     continue;
                 }
-                
+
                 if let Some(stripped) = line.strip_prefix("TOOL:") {
                     // Found a tool invocation start
                     let tool_line = stripped.trim(); // after "TOOL:"
@@ -132,7 +132,11 @@ async fn main() -> Result<()> {
                     // Collect subsequent lines until next TOOL: or end
                     let mut body_lines = Vec::new();
                     i += 1;
-                    while i < lines.len() && !lines[i].trim().starts_with("TOOL:") && lines[i].trim() != "/exit" && lines[i].trim() != "exit" {
+                    while i < lines.len()
+                        && !lines[i].trim().starts_with("TOOL:")
+                        && lines[i].trim() != "/exit"
+                        && lines[i].trim() != "exit"
+                    {
                         body_lines.push(lines[i]);
                         i += 1;
                     }
@@ -180,13 +184,16 @@ async fn main() -> Result<()> {
             let mut results = Vec::new();
             for (tool_name, full_arg) in invocations {
                 match tools::execute_tool(&tool_name, &full_arg).await {
-                    Ok(output) => results.push(format!("TOOL RESULT for {}:\n{}", tool_name, output)),
+                    Ok(output) => {
+                        results.push(format!("TOOL RESULT for {}:\n{}", tool_name, output))
+                    }
                     Err(e) => results.push(format!("TOOL {} failed: {}", tool_name, e)),
                 }
             }
 
             // Send tool results back as a new user message
-            let next_prompt = results.join("\n\n") + "\n\nTool execution complete. You can request more tools or type '/exit' to exit the tool loop.";
+            let next_prompt = results.join("\n\n")
+                + "\n\nTool execution complete. You can request more tools or type '/exit' to exit the tool loop.";
             let stream2 = api.complete_stream(
                 chat_id.clone(),
                 next_prompt,

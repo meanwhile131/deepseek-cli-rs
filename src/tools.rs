@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
+use std::path::Path;
 use tokio::fs;
 use tokio::process::Command;
-use std::path::Path;
 
 pub const SYSTEM_PROMPT: &str = r#"You are an assistant that can use the following tools to interact with the current directory.
 To use a tool, output a line starting with "TOOL:" followed by the tool name and its argument(s). For tools that require multiple pieces of data, the argument(s) may span multiple lines. Available tools:
@@ -55,7 +55,10 @@ pub async fn execute_tool(name: &str, arg: &str) -> Result<String> {
         "apply_search_replace" => {
             // Split the argument into lines: first line is the file path, rest are the block(s)
             let mut lines = arg.lines();
-            let file_path = lines.next().ok_or_else(|| anyhow!("Missing file path"))?.to_string();
+            let file_path = lines
+                .next()
+                .ok_or_else(|| anyhow!("Missing file path"))?
+                .to_string();
             let block_text: String = lines.collect::<Vec<&str>>().join("\n");
 
             // Parse blocks from block_text using the markers
@@ -63,11 +66,15 @@ pub async fn execute_tool(name: &str, arg: &str) -> Result<String> {
             let mut remaining = block_text.as_str();
             while let Some(search_start) = remaining.find("<<<<<<< SEARCH") {
                 let after_search = &remaining[search_start + 15..]; // length of "<<<<<<< SEARCH"
-                let search_end = after_search.find("=======").ok_or_else(|| anyhow!("Missing ======="))?;
+                let search_end = after_search
+                    .find("=======")
+                    .ok_or_else(|| anyhow!("Missing ======="))?;
                 let search = after_search[..search_end].trim().to_string();
 
                 let after_eq = &after_search[search_end + 7..]; // length of "======="
-                let replace_end = after_eq.find(">>>>>>> REPLACE").ok_or_else(|| anyhow!("Missing >>>>>>> REPLACE"))?;
+                let replace_end = after_eq
+                    .find(">>>>>>> REPLACE")
+                    .ok_or_else(|| anyhow!("Missing >>>>>>> REPLACE"))?;
                 let replace = after_eq[..replace_end].trim().to_string();
 
                 blocks.push((search, replace));
@@ -86,14 +93,14 @@ pub async fn execute_tool(name: &str, arg: &str) -> Result<String> {
                 content = content.replace(search, replace);
             }
             fs::write(&file_path, &content).await?;
-            Ok(format!("Applied {} block(s) to {}", blocks.len(), file_path))
+            Ok(format!(
+                "Applied {} block(s) to {}",
+                blocks.len(),
+                file_path
+            ))
         }
         "run_command" => {
-            let output = Command::new("sh")
-                .arg("-c")
-                .arg(arg)
-                .output()
-                .await?;
+            let output = Command::new("sh").arg("-c").arg(arg).output().await?;
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
             let mut result = String::new();

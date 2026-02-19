@@ -465,7 +465,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "deepseek-cli-rs"
+name = "deepseek-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",

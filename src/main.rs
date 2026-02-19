@@ -8,7 +8,7 @@ use std::path::Path;
 use tokio::fs;
 
 mod tools;
-use colored::*;
+use colored::Colorize;
 use tools::{SYSTEM_PROMPT, execute_tool};
 use rustyline::{DefaultEditor, error::ReadlineError};
 use std::sync::{Arc, Mutex};
@@ -113,7 +113,7 @@ async fn main() -> Result<()> {
     } else {
         let chat = api.create_chat().await?;
         let id = chat.id;
-        println!("Chat created with ID: {}", id);
+        println!("Chat created with ID: {id}");
         (id, None)
     };
     println!("System prompt loaded. Type your messages (type '/exit' to quit):");
@@ -132,20 +132,20 @@ async fn main() -> Result<()> {
 
         let line = match line_result {
             Ok(Ok(l)) => l,
-            Ok(Err(ReadlineError::Eof)) | Ok(Err(ReadlineError::Interrupted)) => break,
+            Ok(Err(ReadlineError::Eof | ReadlineError::Interrupted)) => break,
             Ok(Err(e)) => {
-                eprintln!("Input error: {}", e);
+                eprintln!("Input error: {e}");
                 continue;
             }
             Err(e) => {
-                eprintln!("Spawn blocking error: {}", e);
+                eprintln!("Spawn blocking error: {e}");
                 continue;
             }
         };
 
         // Add to history
         if let Err(e) = rl.lock().unwrap().add_history_entry(&line) {
-            eprintln!("Failed to add history entry: {}", e);
+            eprintln!("Failed to add history entry: {e}");
         }
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -162,7 +162,7 @@ async fn main() -> Result<()> {
                 base.push_str("\n\nProject context from DEEPSEEK.md:\n");
                 base.push_str(&ctx);
             }
-            format!("{}\n\nUser: {}", base, trimmed)
+            format!("{base}\n\nUser: {trimmed}")
         } else {
             trimmed.to_string()
         };
@@ -176,12 +176,9 @@ async fn main() -> Result<()> {
             true, // thinking
         );
         let final_message = handle_stream(stream).await?;
-        let mut current_msg = match final_message {
-            Some(msg) => msg,
-            None => {
-                eprintln!("No final message received");
-                continue;
-            }
+        let Some(mut current_msg) = final_message else {
+            eprintln!("No final message received");
+            continue;
         };
         parent_id = current_msg.message_id;
 
@@ -215,7 +212,7 @@ async fn main() -> Result<()> {
                     let full_arg = if body.is_empty() {
                         first_arg
                     } else {
-                        format!("{}\n{}", first_arg, body)
+                        format!("{first_arg}\n{body}")
                     };
                     invocations.push((tool_name, full_arg));
                 } else {
@@ -236,7 +233,7 @@ async fn main() -> Result<()> {
                         let status = match tool_name.as_str() {
                             "read_file" => {
                                 let path = full_arg.lines().next().unwrap_or("?");
-                                format!("Read file at {}", path)
+                                format!("Read file at {path}")
                             }
                             "apply_search_replace" => {
                                 // output is already concise: "Applied X block(s) to Y"
@@ -245,7 +242,7 @@ async fn main() -> Result<()> {
                             "list_files" => {
                                 let count = output.lines().count();
                                 let dir = full_arg.lines().next().unwrap_or("?");
-                                format!("Listed {} files in {}", count, dir)
+                                format!("Listed {count} files in {dir}")
                             }
                             "create_directory" => {
                                 output.clone() // already concise
@@ -260,17 +257,17 @@ async fn main() -> Result<()> {
                                 if exit_code == 0 {
                                     "Command succeeded (exit code: 0)".to_string()
                                 } else {
-                                    format!("Command failed (exit code: {})", exit_code)
+                                    format!("Command failed (exit code: {exit_code})")
                                 }
                             }
-                            _ => format!("Executed tool: {}", tool_name),
+                            _ => format!("Executed tool: {tool_name}"),
                         };
                         println!("{}", status.cyan());
-                        results.push(format!("TOOL RESULT for {}:\n{}", tool_name, output));
+                        results.push(format!("TOOL RESULT for {tool_name}:\n{output}"));
                     }
                     Err(e) => {
-                        eprintln!("{}", format!("Tool {} failed: {}", tool_name, e).red());
-                        results.push(format!("TOOL {} failed: {}", tool_name, e));
+                        eprintln!("{}", format!("Tool {tool_name} failed: {e}").red());
+                        results.push(format!("TOOL {tool_name} failed: {e}"));
                     }
                 }
             }

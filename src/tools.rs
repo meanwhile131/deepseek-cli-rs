@@ -20,7 +20,7 @@ struct Tool {
 async fn list_files_handler(arg: &str) -> Result<String> {
     let path = Path::new(arg);
     if !path.is_dir() {
-        anyhow::bail!("Not a directory: {}", arg);
+        anyhow::bail!("Not a directory: {arg}");
     }
     let mut entries = fs::read_dir(path).await?;
     let mut names = Vec::new();
@@ -40,7 +40,7 @@ async fn read_file_handler(arg: &str) -> Result<String> {
 
 async fn create_directory_handler(arg: &str) -> Result<String> {
     fs::create_dir_all(arg).await?;
-    Ok(format!("Directory created: {}", arg))
+    Ok(format!("Directory created: {arg}"))
 }
 
 async fn apply_search_replace_handler(arg: &str) -> Result<String> {
@@ -79,7 +79,7 @@ async fn apply_search_replace_handler(arg: &str) -> Result<String> {
     let mut content = fs::read_to_string(&file_path).await?;
     for (search, replace) in &blocks {
         if !content.contains(search) {
-            anyhow::bail!("Search string not found in {}: {:?}", file_path, search);
+            anyhow::bail!("Search string not found in {file_path}: {search:?}");
         }
         content = content.replace(search, replace);
     }
@@ -96,7 +96,7 @@ async fn run_command_handler(arg: &str) -> Result<String> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let exit_code = output.status.code().unwrap_or(-1);
-    let mut result = format!("EXIT_CODE:{}\n", exit_code);
+    let mut result = format!("EXIT_CODE:{exit_code}\n");
     if !stdout.is_empty() {
         result.push_str("stdout:\n");
         result.push_str(&stdout);
@@ -129,7 +129,7 @@ async fn write_file_handler(arg: &str) -> Result<String> {
     }
 
     fs::write(&file_path, &content).await?;
-    Ok(format!("File written: {}", file_path))
+    Ok(format!("File written: {file_path}"))
 }
 
 // Registry of all available tools
@@ -194,6 +194,6 @@ pub static SYSTEM_PROMPT: LazyLock<String> = LazyLock::new(|| {
 pub async fn execute_tool(name: &str, arg: &str) -> Result<String> {
     match TOOLS.get(name) {
         Some(tool) => (tool.handler)(arg).await,
-        None => anyhow::bail!("Unknown tool: {}", name),
+        None => anyhow::bail!("Unknown tool: {name}"),
     }
 }

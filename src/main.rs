@@ -1,9 +1,9 @@
 use anyhow::Result;
 use deepseek_api::{DeepSeekAPI, StreamChunk};
 use futures_util::{pin_mut, StreamExt};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use std::env;
-use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
-
+use std::io::Write;
 mod tools;
 use tools::SYSTEM_PROMPT;
 use colored::*;
@@ -20,12 +20,12 @@ async fn main() -> Result<()> {
     println!("System prompt loaded. Type your messages (type '/exit' to quit):");
 
     let mut parent_id: Option<i64> = None;
-    let stdin = BufReader::new(io::stdin());
+    let stdin = BufReader::new(tokio::io::stdin());
     let mut lines = stdin.lines();
 
     loop {
         print!("{}", "> ".cyan().bold());
-        io::stdout().flush().await?;
+        std::io::stdout().flush()?;
         let line = match lines.next_line().await? {
             Some(l) => l,
             None => break,
@@ -66,6 +66,7 @@ async fn main() -> Result<()> {
                         thinking_started = true;
                     }
                     print!("{}", thought.dimmed());
+                    std::io::stdout().flush()?;
                 }
                 StreamChunk::Content(text) => {
                     if !content_started {
@@ -76,6 +77,7 @@ async fn main() -> Result<()> {
                         content_started = true;
                     }
                     print!("{}", text.bright_white());
+                    std::io::stdout().flush()?;
                 }
                 StreamChunk::Message(msg) => {
                     if thinking_started && !content_started {
@@ -179,8 +181,7 @@ async fn main() -> Result<()> {
                             content_started = true;
                         }
                         print!("{}", text.bright_white());
-                        io::stdout().flush().await?;
-                    io::stdout().flush().await?;
+                        std::io::stdout().flush()?;
                     }
                     StreamChunk::Message(msg) => {
                         if thinking_started && !content_started {

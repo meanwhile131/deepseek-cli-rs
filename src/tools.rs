@@ -114,6 +114,24 @@ async fn run_command_handler(arg: &str) -> Result<String> {
     Ok(result)
 }
 
+async fn write_file_handler(arg: &str) -> Result<String> {
+    // Split at first newline: first line is file path, rest is content
+    let mut lines = arg.lines();
+    let file_path = lines
+        .next()
+        .ok_or_else(|| anyhow!("Missing file path"))?
+        .to_string();
+    let content: String = lines.collect::<Vec<&str>>().join("\n");
+
+    // Ensure parent directory exists
+    if let Some(parent) = Path::new(&file_path).parent() {
+        fs::create_dir_all(parent).await?;
+    }
+
+    fs::write(&file_path, &content).await?;
+    Ok(format!("File written: {}", file_path))
+}
+
 // Registry of all available tools
 static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
     let mut m = HashMap::new();
@@ -150,6 +168,13 @@ static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
         Tool {
             description: "run_command <command_string> : runs a shell command (using sh -c) and returns its stdout/stderr. Use with caution.",
             handler: Box::new(|s| Box::pin(run_command_handler(s))),
+        },
+    );
+    m.insert(
+        "write_file",
+        Tool {
+            description: "write_file <file_path> : writes the provided content to the file, creating any necessary parent directories. If the file exists, it is overwritten. The content should follow the file path on subsequent lines.",
+            handler: Box::new(|s| Box::pin(write_file_handler(s))),
         },
     );
     m

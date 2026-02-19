@@ -19,6 +19,14 @@ This is a Rust-based command-line interface for interacting with the DeepSeek AP
 ## Tool Usage
 The assistant can invoke tools by outputting lines starting with `TOOL:` followed by tool name and arguments. Multiple tools can be called in one response; they are executed sequentially. Results are returned with `TOOL RESULT for <tool>:`. The assistant must not simulate results.
 
+Available tools:
+- list_files: lists files in a directory
+- read_file: reads a file
+- create_directory: creates a directory
+- apply_search_replace: applies search/replace blocks to a file
+- run_command: runs a shell command
+- write_file: writes content to a file (overwrites if exists, creates parent directories)
+
 ## Conventions
 - Always use the provided tools to interact with the filesystem and run commands.
 - Keep DEEPSEEK.md updated with relevant project context, especially when adding new features or changing conventions.

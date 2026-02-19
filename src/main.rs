@@ -207,7 +207,17 @@ async fn main() -> Result<()> {
                                 output.clone() // already concise
                             }
                             "run_command" => {
-                                "Executed command (see result)".to_string()
+                                // Extract exit code from output if present
+                                let exit_code = if output.starts_with("EXIT_CODE:") {
+                                    if let Some(line) = output.lines().next() {
+                                        line.strip_prefix("EXIT_CODE:").and_then(|s| s.parse::<i32>().ok()).unwrap_or(-1)
+                                    } else { -1 }
+                                } else { -1 };
+                                if exit_code == 0 {
+                                    format!("Command succeeded (exit code: 0)")
+                                } else {
+                                    format!("Command failed (exit code: {})", exit_code)
+                                }
                             }
                             _ => format!("Executed tool: {}", tool_name),
                         };

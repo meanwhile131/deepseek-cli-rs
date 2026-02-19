@@ -95,20 +95,21 @@ async fn run_command_handler(arg: &str) -> Result<String> {
     let output = Command::new("sh").arg("-c").arg(arg).output().await?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let mut result = String::new();
+    let exit_code = output.status.code().unwrap_or(-1);
+    let mut result = format!("EXIT_CODE:{}\n", exit_code);
     if !stdout.is_empty() {
         result.push_str("stdout:\n");
         result.push_str(&stdout);
     }
     if !stderr.is_empty() {
-        if !result.is_empty() {
+        if !stdout.is_empty() {
             result.push_str("\n\n");
         }
         result.push_str("stderr:\n");
         result.push_str(&stderr);
     }
-    if result.is_empty() {
-        result = "Command executed successfully (no output)".to_string();
+    if stdout.is_empty() && stderr.is_empty() {
+        result.push_str("Command executed successfully (no output)");
     }
     Ok(result)
 }

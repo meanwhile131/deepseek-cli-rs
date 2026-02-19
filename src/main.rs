@@ -246,7 +246,7 @@ async fn main() -> Result<()> {
                                     } else { -1 }
                                 } else { -1 };
                                 if exit_code == 0 {
-                                    format!("Command succeeded (exit code: 0)")
+                                    "Command succeeded (exit code: 0)".to_string()
                                 } else {
                                     format!("Command failed (exit code: {})", exit_code)
                                 }

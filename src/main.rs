@@ -184,19 +184,14 @@ async fn run_chat(api: DeepSeekAPI, chat_id: String, mut parent_id: Option<i64>,
         parent_id = current_msg.message_id;
 
         // Handle tool calls loop
-        loop {
-            match handle_tool_calls(&api, &chat_id, current_msg, &mut parent_id).await? {
-                Some(new_msg) => {
-                    current_msg = new_msg;
-                }
-                None => break,
-            }
+        while let Some(new_msg) = handle_tool_calls(&api, &chat_id, current_msg, &mut parent_id).await? {
+            current_msg = new_msg;
         }
     }
     Ok(())
 }
 
-async fn handle_tool_calls(api: &DeepSeekAPI, chat_id: &str, mut current_msg: Message, parent_id: &mut Option<i64>) -> Result<Option<Message>> {
+async fn handle_tool_calls(api: &DeepSeekAPI, chat_id: &str, current_msg: Message, parent_id: &mut Option<i64>) -> Result<Option<Message>> {
     let lines: Vec<&str> = current_msg.content.lines().collect();
     let mut i = 0;
     let mut invocations = Vec::new();
@@ -244,16 +239,13 @@ async fn handle_tool_calls(api: &DeepSeekAPI, chat_id: &str, mut current_msg: Me
                         let path = full_arg.lines().next().unwrap_or("?");
                         format!("Read file at {path}")
                     }
-                    "apply_search_replace" => {
+                    "apply_search_replace" | "create_directory" => {
                         output.clone()
                     }
                     "list_files" => {
                         let count = output.lines().count();
                         let dir = full_arg.lines().next().unwrap_or("?");
                         format!("Listed {count} files in {dir}")
-                    }
-                    "create_directory" => {
-                        output.clone()
                     }
                     "run_command" => {
                         let exit_code = if output.starts_with("EXIT_CODE:") {
@@ -283,7 +275,7 @@ async fn handle_tool_calls(api: &DeepSeekAPI, chat_id: &str, mut current_msg: Me
     let stream = api.complete_stream(
         chat_id.to_string(),
         next_prompt,
-        parent_id.clone(),
+        *parent_id,
         true,
         true,
     );

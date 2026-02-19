@@ -41,3 +41,4 @@ To test: `cargo clippy`
 
 ## Recent Changes
 - Refactored `src/main.rs`: split the large `main` function into smaller functions (`run_chat`, `handle_tool_calls`) to reduce line count and address `clippy::pedantic` warning.
+- Fixed clippy::pedantic warnings: converted a loop into while let and merged identical match arms.

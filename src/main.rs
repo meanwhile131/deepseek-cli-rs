@@ -104,14 +104,23 @@ async fn main() -> Result<()> {
         };
         parent_id = current_msg.message_id;
 
-        // Automatic tool‑calling loop
+        // Automatic tool‑calling loop with explicit exit
         loop {
             let lines: Vec<&str> = current_msg.content.lines().collect();
             let mut i = 0;
             let mut invocations = Vec::new();
+            let mut explicit_exit = false;
 
             while i < lines.len() {
                 let line = lines[i].trim();
+                
+                // Check for explicit exit command
+                if line == "/exit" || line == "exit" {
+                    explicit_exit = true;
+                    i += 1;
+                    continue;
+                }
+                
                 if let Some(stripped) = line.strip_prefix("TOOL:") {
                     // Found a tool invocation start
                     let tool_line = stripped.trim(); // after "TOOL:"
@@ -123,7 +132,7 @@ async fn main() -> Result<()> {
                     // Collect subsequent lines until next TOOL: or end
                     let mut body_lines = Vec::new();
                     i += 1;
-                    while i < lines.len() && !lines[i].trim().starts_with("TOOL:") {
+                    while i < lines.len() && !lines[i].trim().starts_with("TOOL:") && lines[i].trim() != "/exit" && lines[i].trim() != "exit" {
                         body_lines.push(lines[i]);
                         i += 1;
                     }
@@ -142,8 +151,29 @@ async fn main() -> Result<()> {
                 }
             }
 
-            if invocations.is_empty() {
+            // If explicit exit requested, break out of the tool loop
+            if explicit_exit {
                 break;
+            }
+
+            // If no tool invocations found, continue waiting for them instead of breaking
+            if invocations.is_empty() {
+                // Ask the model to either use tools or explicitly exit
+                let next_prompt = "No tools were requested. If you're done with tool operations, please type '/exit' to exit the tool loop. Otherwise, please specify which tools you'd like to use.".to_string();
+                let stream2 = api.complete_stream(
+                    chat_id.clone(),
+                    next_prompt,
+                    parent_id,
+                    true, // search
+                    true, // thinking
+                );
+                if let Some(msg) = handle_stream(stream2).await? {
+                    current_msg = msg;
+                    parent_id = current_msg.message_id;
+                    continue; // Continue the loop to check for tools or exit
+                } else {
+                    break;
+                }
             }
 
             // Execute all requested tools
@@ -156,7 +186,7 @@ async fn main() -> Result<()> {
             }
 
             // Send tool results back as a new user message
-            let next_prompt = results.join("\n\n") + "\n\nContinue with the next step or provide the final answer.";
+            let next_prompt = results.join("\n\n") + "\n\nTool execution complete. You can request more tools or type '/exit' to exit the tool loop.";
             let stream2 = api.complete_stream(
                 chat_id.clone(),
                 next_prompt,

@@ -6,6 +6,7 @@ use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 mod tools;
 use tools::SYSTEM_PROMPT;
+use colored::*;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -23,7 +24,7 @@ async fn main() -> Result<()> {
     let mut lines = stdin.lines();
 
     loop {
-        eprint!("> ");
+        eprint!("{}", "> ".cyan().bold());
         io::stderr().flush().await?;
         let line = match lines.next_line().await? {
             Some(l) => l,
@@ -61,24 +62,24 @@ async fn main() -> Result<()> {
             match chunk? {
                 StreamChunk::Thinking(thought) => {
                     if !thinking_started {
-                        eprintln!("--- Thinking ---");
+                        eprintln!("{}", "--- Thinking ---".yellow());
                         thinking_started = true;
                     }
-                    eprint!("{}", thought);
+                    eprint!("{}", thought.dimmed());
                 }
                 StreamChunk::Content(text) => {
                     if !content_started {
                         if thinking_started {
-                            eprintln!("\n--- End of thinking ---");
+                            eprintln!("\n{}", "--- End of thinking ---".yellow());
                         }
-                        println!("--- Response ---");
+                        println!("{}", "--- Response ---".green());
                         content_started = true;
                     }
-                    print!("{}", text);
+                    print!("{}", text.bright_white());
                 }
                 StreamChunk::Message(msg) => {
                     if thinking_started && !content_started {
-                        eprintln!("\n--- End of thinking ---");
+                        eprintln!("\n{}", "--- End of thinking ---".yellow());
                     }
                     final_message = Some(msg);
                     println!(); // newline after content
@@ -141,26 +142,26 @@ async fn main() -> Result<()> {
                 match chunk? {
                     StreamChunk::Thinking(thought) => {
                         if !thinking_started {
-                            eprintln!("--- Thinking ---");
+                            eprintln!("{}", "--- Thinking ---".yellow());
                             thinking_started = true;
                         }
-                        eprint!("{}", thought);
+                        eprint!("{}", thought.dimmed());
                     }
                     StreamChunk::Content(text) => {
                         if !content_started {
                             if thinking_started {
-                                eprintln!("\n--- End of thinking ---");
+                                eprintln!("\n{}", "--- End of thinking ---".yellow());
                             }
-                            println!("--- Response ---");
+                            println!("{}", "--- Response ---".green());
                             content_started = true;
                         }
-                        print!("{}", text);
+                        print!("{}", text.bright_white());
                         io::stdout().flush().await?;
                     io::stdout().flush().await?;
                     }
                     StreamChunk::Message(msg) => {
                         if thinking_started && !content_started {
-                            eprintln!("\n--- End of thinking ---");
+                            eprintln!("\n{}", "--- End of thinking ---".yellow());
                         }
                         final_msg2 = Some(msg);
                         println!();

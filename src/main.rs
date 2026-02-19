@@ -84,6 +84,17 @@ async fn load_token() -> Result<String> {
     ))
 }
 
+async fn read_deepseek_context() -> Result<Option<String>> {
+    let path = Path::new("DEEPSEEK.md");
+    if path.exists() {
+        let content = fs::read_to_string(path).await?;
+        if !content.trim().is_empty() {
+            return Ok(Some(content));
+        }
+    }
+    Ok(None)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let token = load_token().await?;
@@ -150,7 +161,12 @@ async fn main() -> Result<()> {
 
         // Prepend system prompt only on the very first message
         let prompt = if parent_id.is_none() {
-            format!("{}\n\nUser: {}", &*SYSTEM_PROMPT, trimmed)
+            let mut base = SYSTEM_PROMPT.to_string();
+            if let Some(ctx) = read_deepseek_context().await? {
+                base.push_str("\n\nProject context from DEEPSEEK.md:\n");
+                base.push_str(&ctx);
+            }
+            format!("{}\n\nUser: {}", base, trimmed)
         } else {
             trimmed.to_string()
         };

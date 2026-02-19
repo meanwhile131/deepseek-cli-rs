@@ -17,10 +17,11 @@ To use a tool, output a line starting with "TOOL:" followed by the tool name and
       (replacement text)
       >>>>>>> REPLACE
   Multiple blocks can be concatenated; each will be applied sequentially.
-  The search must match exactly.
+  The search must match exactly, including whitespace and indentation.
 - run_command <command_string>                     : runs a shell command (using sh -c) and returns its stdout/stderr. Use with caution.
 
-When you want to show output to the user without calling any tools, you must specify /exit or exit on a new line at the end of your message.
+You can request multiple tools in one response by starting each with "TOOL:" on its own line. After using tools, you will receive the result(s) in the next user message. Then you can either request more tools or exit.
+To exit the tool loop and prompt the user for a message, you must output a line containing exactly "/exit" or "exit". That response mustn't contain tool calls.
 "#;
 
 pub async fn execute_tool(name: &str, arg: &str) -> Result<String> {

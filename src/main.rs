@@ -98,29 +98,52 @@ async fn main() -> Result<()> {
 
         // Automatic tool‑calling loop
         loop {
-            let tool_lines: Vec<&str> = current_msg.content
-                .lines()
-                .filter(|l| l.trim().starts_with("TOOL:"))
-                .collect();
+            let lines: Vec<&str> = current_msg.content.lines().collect();
+            let mut i = 0;
+            let mut invocations = Vec::new();
 
-            if tool_lines.is_empty() {
+            while i < lines.len() {
+                let line = lines[i].trim();
+                if line.starts_with("TOOL:") {
+                    // Found a tool invocation start
+                    let tool_line = &line[5..].trim(); // after "TOOL:"
+                    // Split tool_line into name and optional first argument
+                    let mut tool_parts = tool_line.splitn(2, ' ');
+                    let tool_name = tool_parts.next().unwrap_or("").to_string();
+                    let first_arg = tool_parts.next().unwrap_or("").to_string();
+
+                    // Collect subsequent lines until next TOOL: or end
+                    let mut body_lines = Vec::new();
+                    i += 1;
+                    while i < lines.len() && !lines[i].trim().starts_with("TOOL:") {
+                        body_lines.push(lines[i]);
+                        i += 1;
+                    }
+                    // body_lines contains the raw lines (preserve newlines)
+                    let body = body_lines.join("\n");
+
+                    // Combine first_arg and body into the full argument string
+                    let full_arg = if body.is_empty() {
+                        first_arg
+                    } else {
+                        format!("{}\n{}", first_arg, body)
+                    };
+                    invocations.push((tool_name, full_arg));
+                } else {
+                    i += 1;
+                }
+            }
+
+            if invocations.is_empty() {
                 break;
             }
 
             // Execute all requested tools
             let mut results = Vec::new();
-            for line in tool_lines {
-                let line = line.trim();
-                let parts: Vec<&str> = line.splitn(3, ' ').collect();
-                if parts.len() < 3 {
-                    results.push(format!("Error: Invalid tool line: '{}'", line));
-                    continue;
-                }
-                let tool_name = parts[1];
-                let arg = parts[2];
-                match tools::execute_tool(tool_name, arg).await {
-                    Ok(output) => results.push(format!("TOOL RESULT for {} {}:\n{}", tool_name, arg, output)),
-                    Err(e) => results.push(format!("TOOL {} {} failed: {}", tool_name, arg, e)),
+            for (tool_name, full_arg) in invocations {
+                match tools::execute_tool(&tool_name, &full_arg).await {
+                    Ok(output) => results.push(format!("TOOL RESULT for {}:\n{}", tool_name, output)),
+                    Err(e) => results.push(format!("TOOL {} failed: {}", tool_name, e)),
                 }
             }
 

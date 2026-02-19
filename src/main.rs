@@ -24,8 +24,8 @@ async fn main() -> Result<()> {
     let mut lines = stdin.lines();
 
     loop {
-        eprint!("{}", "> ".cyan().bold());
-        io::stderr().flush().await?;
+        print!("{}", "> ".cyan().bold());
+        io::stdout().flush().await?;
         let line = match lines.next_line().await? {
             Some(l) => l,
             None => break,
@@ -62,7 +62,7 @@ async fn main() -> Result<()> {
             match chunk? {
                 StreamChunk::Thinking(thought) => {
                     if !thinking_started {
-                        eprintln!("{}", "--- Thinking ---".yellow());
+                        println!("{}", "--- Thinking ---".yellow());
                         thinking_started = true;
                     }
                     print!("{}", thought.dimmed());
@@ -165,7 +165,7 @@ async fn main() -> Result<()> {
                 match chunk? {
                     StreamChunk::Thinking(thought) => {
                         if !thinking_started {
-                            eprintln!("{}", "--- Thinking ---".yellow());
+                            println!("{}", "--- Thinking ---".yellow());
                             thinking_started = true;
                         }
                         print!("{}", thought.dimmed());

@@ -49,11 +49,31 @@ async fn main() -> Result<()> {
         pin_mut!(stream);
 
         let mut final_message = None;
+        let mut thinking_started = false;
+        let mut content_started = false;
         while let Some(chunk) = stream.next().await {
             match chunk? {
-                StreamChunk::Content(text) => print!("{}", text),
-                StreamChunk::Thinking(thought) => eprint!("\n[thinking] {}\n", thought),
+                StreamChunk::Thinking(thought) => {
+                    if !thinking_started {
+                        eprintln!("--- Thinking ---");
+                        thinking_started = true;
+                    }
+                    eprint!("{}", thought);
+                }
+                StreamChunk::Content(text) => {
+                    if !content_started {
+                        if thinking_started {
+                            eprintln!("\n--- End of thinking ---");
+                        }
+                        println!("--- Response ---");
+                        content_started = true;
+                    }
+                    print!("{}", text);
+                }
                 StreamChunk::Message(msg) => {
+                    if thinking_started && !content_started {
+                        eprintln!("\n--- End of thinking ---");
+                    }
                     final_message = Some(msg);
                     println!(); // newline after content
                 }
@@ -111,11 +131,31 @@ async fn main() -> Result<()> {
             pin_mut!(stream2);
 
             let mut final_msg2 = None;
+            let mut thinking_started = false;
+            let mut content_started = false;
             while let Some(chunk) = stream2.next().await {
                 match chunk? {
-                    StreamChunk::Content(text) => print!("{}", text),
-                    StreamChunk::Thinking(thought) => eprint!("\n[thinking] {}\n", thought),
+                    StreamChunk::Thinking(thought) => {
+                        if !thinking_started {
+                            eprintln!("--- Thinking ---");
+                            thinking_started = true;
+                        }
+                        eprint!("{}", thought);
+                    }
+                    StreamChunk::Content(text) => {
+                        if !content_started {
+                            if thinking_started {
+                                eprintln!("\n--- End of thinking ---");
+                            }
+                            println!("--- Response ---");
+                            content_started = true;
+                        }
+                        print!("{}", text);
+                    }
                     StreamChunk::Message(msg) => {
+                        if thinking_started && !content_started {
+                            eprintln!("\n--- End of thinking ---");
+                        }
                         final_msg2 = Some(msg);
                         println!();
                     }

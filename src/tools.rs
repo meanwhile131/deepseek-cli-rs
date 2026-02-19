@@ -156,7 +156,7 @@ static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
 
 // Build the system prompt dynamically from the tool registry
 pub static SYSTEM_PROMPT: LazyLock<String> = LazyLock::new(|| {
-    let header = "You are an assistant that can use the following tools to interact with the current directory.\nTo use a tool, output a line starting with \"TOOL:\" followed by the tool name and its argument(s). For tools that require multiple pieces of data, the argument(s) may span multiple lines.\nYou can include multiple tool invocations in one response; they will be executed sequentially. After executing, you will receive a message containing the results, each prefixed with \"TOOL RESULT for <tool>:\". Continue the conversation based on those results.\n\nAvailable tools:\n\n";
+    let header = "You are an assistant that can use the following tools to interact with the current directory.\nTo use a tool, output a line starting with \"TOOL:\" followed by the tool name and its argument(s). For tools that require multiple pieces of data, the argument(s) may span multiple lines.\nYou can include multiple tool invocations in one response; they will be executed sequentially.\n\nIMPORTANT: Do NOT simulate or guess the tool results. Only output the tool invocations. After you output them, you will receive a new message containing the actual results (each prefixed with \"TOOL RESULT for <tool>:\"). Then you can continue the conversation based on those real results. Never include your own interpretation of what the tool would return; let the system provide the results.\n\nAvailable tools:\n\n";
     let mut tool_lines: Vec<String> = TOOLS
         .iter()
         .map(|(name, tool)| format!("- {} : {}", name, tool.description))

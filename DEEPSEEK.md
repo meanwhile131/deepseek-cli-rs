@@ -30,6 +30,7 @@ Available tools:
 ## Conventions
 - Always use the provided tools to interact with the filesystem and run commands.
 - Keep DEEPSEEK.md updated with relevant project context, especially when adding new features or changing conventions.
+- The assistant will proactively update DEEPSEEK.md when changes are made to the project (e.g., adding tools, modifying conventions).
 - Use `cargo build` to test changes, and commit with `git` when appropriate.
 - Aim for clean code with no clippy warnings.
 

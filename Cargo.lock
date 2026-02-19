@@ -386,6 +386,8 @@ dependencies = [
  "anyhow",
  "deepseek-api",
  "futures-util",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 

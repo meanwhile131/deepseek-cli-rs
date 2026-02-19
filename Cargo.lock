@@ -411,6 +411,7 @@ dependencies = [
  "anyhow",
  "colored",
  "deepseek-api",
+ "dirs",
  "futures-util",
  "rustyline",
  "serde",

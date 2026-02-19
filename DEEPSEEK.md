@@ -44,3 +44,4 @@ To test: `cargo clippy`
 - Fixed clippy::pedantic warnings: converted a loop into while let and merged identical match arms.
 - Renamed the binary to "deepseek" by adding a `[[bin]]` section in Cargo.toml. The executable is now built as `deepseek` instead of `deepseek-cli-rs`.
 - Renamed the package from "deepseek-cli-rs" to "deepseek-cli" in Cargo.toml.
+- Added automatic reprompting with a warning if the model returns an empty response. The assistant will be reprompted indefinitely until a non‑empty response is received (or the user interrupts). The warning message printed to the terminal is now colored yellow for better visibility.

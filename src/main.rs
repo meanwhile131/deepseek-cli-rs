@@ -122,7 +122,7 @@ async fn main() -> Result<()> {
 }
 
 async fn run_chat(api: DeepSeekAPI, chat_id: String, mut parent_id: Option<i64>, rl: Arc<Mutex<DefaultEditor>>) -> Result<()> {
-    loop {
+    'outer: loop {
         // Use rustyline for line editing with arrow keys
         let rl_clone = rl.clone();
         let prompt = format!("{}", "> ".cyan().bold());
@@ -182,6 +182,30 @@ async fn run_chat(api: DeepSeekAPI, chat_id: String, mut parent_id: Option<i64>,
             continue;
         };
         parent_id = current_msg.message_id;
+
+        // Check for empty response and reprompt with warning until non-empty
+        while current_msg.content.trim().is_empty() {
+            eprintln!("{}", "Model returned empty response, reprompting with warning...".yellow());
+            let warning = "WARNING: Your previous response was empty. Please provide a meaningful response or use tools as appropriate.\n\nContinue with the next step or provide the final answer.";
+            let stream = api.complete_stream(
+                chat_id.clone(),
+                warning.to_string(),
+                parent_id,
+                true,
+                true,
+            );
+            let new_msg = handle_stream(stream).await?;
+            match new_msg {
+                Some(msg) => {
+                    parent_id = msg.message_id;
+                    current_msg = msg;
+                }
+                None => {
+                    eprintln!("{}", "No final message received after warning; proceeding to user input.".yellow());
+                    continue 'outer;
+                }
+            }
+        }
 
         // Handle tool calls loop
         while let Some(new_msg) = handle_tool_calls(&api, &chat_id, current_msg, &mut parent_id).await? {

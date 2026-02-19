@@ -2,7 +2,21 @@ use anyhow::Result;
 use deepseek_api::{DeepSeekAPI, StreamChunk};
 use futures_util::{pin_mut, StreamExt};
 use std::env;
+use tokio::fs;
 use tokio::io::{self, AsyncBufReadExt, BufReader};
+use std::path::Path;
+
+const SYSTEM_PROMPT: &str = r#"You are an assistant that can use the following tools to interact with the current directory.
+To use a tool, output a line starting with "TOOL:" followed by the tool name and its single argument.
+Available tools:
+- list_files <directory>   : lists all files and directories in the given directory (non‑recursive)
+- read_file <file_path>    : outputs the text contents of a file
+- create_directory <dir>   : creates a directory (and any missing parents)
+
+After using a tool, you will receive the result in the next user message, prefixed with "TOOL RESULT:".
+You can then continue the conversation or use another tool.
+When you have the final answer, just output it normally without any "TOOL:" line.
+"#;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -13,7 +27,7 @@ async fn main() -> Result<()> {
     let chat = api.create_chat().await?;
     let chat_id = chat.id.clone();
     println!("Chat created with ID: {}", chat_id);
-    println!("Start typing your messages (type '/exit' to quit):");
+    println!("System prompt loaded. Type your messages (type '/exit' to quit):");
 
     let mut parent_id: Option<i64> = None;
     let stdin = BufReader::new(io::stdin());
@@ -28,10 +42,17 @@ async fn main() -> Result<()> {
             break;
         }
 
-        println!("Sending...");
+        // Prepend system prompt only on the very first message
+        let prompt = if parent_id.is_none() {
+            format!("{}\n\nUser: {}", SYSTEM_PROMPT, trimmed)
+        } else {
+            trimmed.to_string()
+        };
+
+        // Stream the assistant's response
         let stream = api.complete_stream(
             chat_id.clone(),
-            trimmed.to_string(),
+            prompt,
             parent_id,
             false, // search
             false, // thinking
@@ -41,12 +62,8 @@ async fn main() -> Result<()> {
         let mut final_message = None;
         while let Some(chunk) = stream.next().await {
             match chunk? {
-                StreamChunk::Content(text) => {
-                    print!("{}", text);
-                }
-                StreamChunk::Thinking(thought) => {
-                    eprint!("\n[thinking] {}\n", thought);
-                }
+                StreamChunk::Content(text) => print!("{}", text),
+                StreamChunk::Thinking(thought) => eprint!("\n[thinking] {}\n", thought),
                 StreamChunk::Message(msg) => {
                     final_message = Some(msg);
                     println!(); // newline after content
@@ -54,12 +71,111 @@ async fn main() -> Result<()> {
             }
         }
 
-        if let Some(msg) = final_message {
-            parent_id = msg.message_id;
-        } else {
-            eprintln!("No final message received");
+        let mut current_msg = match final_message {
+            Some(msg) => msg,
+            None => {
+                eprintln!("No final message received");
+                continue;
+            }
+        };
+        parent_id = Some(current_msg.id);
+
+        // Automatic tool‑calling loop
+        let mut tool_iterations = 0;
+        const MAX_TOOL_ITER: usize = 5;
+        while tool_iterations < MAX_TOOL_ITER {
+            let tool_lines: Vec<&str> = current_msg.content
+                .lines()
+                .filter(|l| l.trim().starts_with("TOOL:"))
+                .collect();
+
+            if tool_lines.is_empty() {
+                break;
+            }
+
+            // Execute all requested tools
+            let mut results = Vec::new();
+            for line in tool_lines {
+                let line = line.trim();
+                let parts: Vec<&str> = line.splitn(3, ' ').collect();
+                if parts.len() < 3 {
+                    results.push(format!("Error: Invalid tool line: '{}'", line));
+                    continue;
+                }
+                let tool_name = parts[1];
+                let arg = parts[2];
+                match execute_tool(tool_name, arg).await {
+                    Ok(output) => results.push(format!("TOOL RESULT for {} {}:\n{}", tool_name, arg, output)),
+                    Err(e) => results.push(format!("TOOL {} {} failed: {}", tool_name, arg, e)),
+                }
+            }
+
+            // Send tool results back as a new user message
+            let next_prompt = results.join("\n\n") + "\n\nContinue with the next step or provide the final answer.";
+            let stream2 = api.complete_stream(
+                chat_id.clone(),
+                next_prompt,
+                parent_id,
+                false,
+                false,
+            );
+            pin_mut!(stream2);
+
+            let mut final_msg2 = None;
+            while let Some(chunk) = stream2.next().await {
+                match chunk? {
+                    StreamChunk::Content(text) => print!("{}", text),
+                    StreamChunk::Thinking(thought) => eprint!("\n[thinking] {}\n", thought),
+                    StreamChunk::Message(msg) => {
+                        final_msg2 = Some(msg);
+                        println!();
+                    }
+                }
+            }
+
+            if let Some(msg) = final_msg2 {
+                current_msg = msg;
+                parent_id = Some(current_msg.id);
+            } else {
+                break;
+            }
+            tool_iterations += 1;
+        }
+
+        if tool_iterations == MAX_TOOL_ITER {
+            eprintln!("Reached maximum tool iterations.");
         }
     }
 
     Ok(())
+}
+
+/// Execute one of the allowed tools and return its output as a String.
+async fn execute_tool(name: &str, arg: &str) -> Result<String> {
+    match name {
+        "list_files" => {
+            let path = Path::new(arg);
+            if !path.is_dir() {
+                anyhow::bail!("Not a directory: {}", arg);
+            }
+            let mut entries = fs::read_dir(path).await?;
+            let mut names = Vec::new();
+            while let Some(entry) = entries.next_entry().await? {
+                if let Some(name) = entry.file_name().to_str() {
+                    names.push(name.to_string());
+                }
+            }
+            names.sort();
+            Ok(names.join("\n"))
+        }
+        "read_file" => {
+            let content = fs::read_to_string(arg).await?;
+            Ok(content)
+        }
+        "create_directory" => {
+            fs::create_dir_all(arg).await?;
+            Ok(format!("Directory created: {}", arg))
+        }
+        _ => anyhow::bail!("Unknown tool: {}", name),
+    }
 }

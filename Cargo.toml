@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-deepseek-api = { path = "../deepseek-api-rs" }
+deepseek-api = { git = "https://github.com/meanwhile131/deepseek-api-rs.git", version = "0.1.0" }
 tokio = { version = "1", features = ["full"] }
 anyhow = "1.0"
 futures-util = "0.3"

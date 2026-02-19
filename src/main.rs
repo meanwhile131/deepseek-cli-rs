@@ -188,9 +188,36 @@ async fn main() -> Result<()> {
             for (tool_name, full_arg) in invocations {
                 match execute_tool(&tool_name, &full_arg).await {
                     Ok(output) => {
-                        results.push(format!("TOOL RESULT for {}:\n{}", tool_name, output))
+                        // Print a concise status to the console
+                        let status = match tool_name.as_str() {
+                            "read_file" => {
+                                let path = full_arg.lines().next().unwrap_or("?");
+                                format!("Read file at {}", path)
+                            }
+                            "apply_search_replace" => {
+                                // output is already concise: "Applied X block(s) to Y"
+                                output.clone()
+                            }
+                            "list_files" => {
+                                let count = output.lines().count();
+                                let dir = full_arg.lines().next().unwrap_or("?");
+                                format!("Listed {} files in {}", count, dir)
+                            }
+                            "create_directory" => {
+                                output.clone() // already concise
+                            }
+                            "run_command" => {
+                                format!("Executed command (see result)")
+                            }
+                            _ => format!("Executed tool: {}", tool_name),
+                        };
+                        println!("{}", status.cyan());
+                        results.push(format!("TOOL RESULT for {}:\n{}", tool_name, output));
                     }
-                    Err(e) => results.push(format!("TOOL {} failed: {}", tool_name, e)),
+                    Err(e) => {
+                        eprintln!("{}", format!("Tool {} failed: {}", tool_name, e).red());
+                        results.push(format!("TOOL {} failed: {}", tool_name, e));
+                    }
                 }
             }
 

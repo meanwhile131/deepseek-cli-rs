@@ -43,3 +43,4 @@ To test: `cargo clippy`
 - Refactored `src/main.rs`: split the large `main` function into smaller functions (`run_chat`, `handle_tool_calls`) to reduce line count and address `clippy::pedantic` warning.
 - Fixed clippy::pedantic warnings: converted a loop into while let and merged identical match arms.
 - Renamed the binary to "deepseek" by adding a `[[bin]]` section in Cargo.toml. The executable is now built as `deepseek` instead of `deepseek-cli-rs`.
+- Renamed the package from "deepseek-cli-rs" to "deepseek-cli" in Cargo.toml.

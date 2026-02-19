@@ -6,7 +6,7 @@ use std::io::Write;
 
 mod tools;
 use colored::*;
-use tools::SYSTEM_PROMPT;
+use tools::{SYSTEM_PROMPT, execute_tool};
 use rustyline::{DefaultEditor, error::ReadlineError};
 use std::sync::{Arc, Mutex};
 
@@ -118,7 +118,7 @@ async fn main() -> Result<()> {
 
         // Prepend system prompt only on the very first message
         let prompt = if parent_id.is_none() {
-            format!("{}\n\nUser: {}", SYSTEM_PROMPT, trimmed)
+            format!("{}\n\nUser: {}", &*SYSTEM_PROMPT, trimmed)
         } else {
             trimmed.to_string()
         };
@@ -186,7 +186,7 @@ async fn main() -> Result<()> {
             // Execute all requested tools
             let mut results = Vec::new();
             for (tool_name, full_arg) in invocations {
-                match tools::execute_tool(&tool_name, &full_arg).await {
+                match execute_tool(&tool_name, &full_arg).await {
                     Ok(output) => {
                         results.push(format!("TOOL RESULT for {}:\n{}", tool_name, output))
                     }

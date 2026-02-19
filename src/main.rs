@@ -78,7 +78,7 @@ async fn main() -> Result<()> {
                 continue;
             }
         };
-        parent_id = Some(current_msg.id);
+        parent_id = current_msg.message_id;
 
         // Automatic tool‑calling loop
         let mut tool_iterations = 0;
@@ -135,7 +135,7 @@ async fn main() -> Result<()> {
 
             if let Some(msg) = final_msg2 {
                 current_msg = msg;
-                parent_id = Some(current_msg.id);
+                parent_id = current_msg.message_id;
             } else {
                 break;
             }

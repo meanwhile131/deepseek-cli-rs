@@ -65,12 +65,12 @@ async fn main() -> Result<()> {
                         eprintln!("{}", "--- Thinking ---".yellow());
                         thinking_started = true;
                     }
-                    eprint!("{}", thought.dimmed());
+                    print!("{}", thought.dimmed());
                 }
                 StreamChunk::Content(text) => {
                     if !content_started {
                         if thinking_started {
-                            eprintln!("\n{}", "--- End of thinking ---".yellow());
+                            println!("\n{}", "--- End of thinking ---".yellow());
                         }
                         println!("{}", "--- Response ---".green());
                         content_started = true;
@@ -79,7 +79,7 @@ async fn main() -> Result<()> {
                 }
                 StreamChunk::Message(msg) => {
                     if thinking_started && !content_started {
-                        eprintln!("\n{}", "--- End of thinking ---".yellow());
+                        println!("\n{}", "--- End of thinking ---".yellow());
                     }
                     final_message = Some(msg);
                     println!(); // newline after content
@@ -168,12 +168,12 @@ async fn main() -> Result<()> {
                             eprintln!("{}", "--- Thinking ---".yellow());
                             thinking_started = true;
                         }
-                        eprint!("{}", thought.dimmed());
+                        print!("{}", thought.dimmed());
                     }
                     StreamChunk::Content(text) => {
                         if !content_started {
                             if thinking_started {
-                                eprintln!("\n{}", "--- End of thinking ---".yellow());
+                                println!("\n{}", "--- End of thinking ---".yellow());
                             }
                             println!("{}", "--- Response ---".green());
                             content_started = true;
@@ -184,7 +184,7 @@ async fn main() -> Result<()> {
                     }
                     StreamChunk::Message(msg) => {
                         if thinking_started && !content_started {
-                            eprintln!("\n{}", "--- End of thinking ---".yellow());
+                            println!("\n{}", "--- End of thinking ---".yellow());
                         }
                         final_msg2 = Some(msg);
                         println!();

@@ -4,32 +4,26 @@ use tokio::process::Command;
 use std::path::Path;
 
 pub const SYSTEM_PROMPT: &str = r#"You are an assistant that can use the following tools to interact with the current directory.
-To use a tool, output a line starting with "TOOL:" followed by the tool name and its argument(s). For tools that require multiple pieces of data, the argument must be a JSON string. Available tools:
+To use a tool, output a line starting with "TOOL:" followed by the tool name and its argument(s). For tools that require multiple pieces of data, the argument(s) may span multiple lines. Available tools:
 
 - list_files <directory>                         : lists all files and directories in the given directory (non‑recursive)
 - read_file <file_path>                           : outputs the text contents of a file
 - create_directory <dir>                           : creates a directory (and any missing parents)
-- apply_search_replace <json>                      : applies one or more search/replace blocks to a file. The JSON must have the format:
-    {"file": "<file_path>", "blocks": [{"search": "...", "replace": "..."}, ...]}
-    Each block will be applied sequentially to the current file content. The search must match exactly.
+- apply_search_replace <file_path>                  : applies one or more search/replace blocks to a file.
+  The blocks must be placed on the lines following the tool line, using the markers:
+      <<<<<<< SEARCH
+      (text to search for)
+      =======
+      (replacement text)
+      >>>>>>> REPLACE
+  Multiple blocks can be concatenated; each will be applied sequentially.
+  The search must match exactly.
 - run_command <command_string>                     : runs a shell command (using sh -c) and returns its stdout/stderr. Use with caution.
 
 After using a tool, you will receive the result in the next user message, prefixed with "TOOL RESULT:".
 You can then continue the conversation or use another tool.
 When you have the final answer, just output it normally without any "TOOL:" line.
 "#;
-
-#[derive(serde::Deserialize)]
-struct EditFileArgs {
-    file: String,
-    blocks: Vec<Block>,
-}
-
-#[derive(serde::Deserialize)]
-struct Block {
-    search: String,
-    replace: String,
-}
 
 pub async fn execute_tool(name: &str, arg: &str) -> Result<String> {
     match name {
@@ -57,17 +51,40 @@ pub async fn execute_tool(name: &str, arg: &str) -> Result<String> {
             Ok(format!("Directory created: {}", arg))
         }
         "apply_search_replace" => {
-            let args: EditFileArgs = serde_json::from_str(arg)
-                .map_err(|e| anyhow!("Invalid JSON for apply_search_replace: {}", e))?;
-            let mut content = fs::read_to_string(&args.file).await?;
-            for block in &args.blocks {
-                if !content.contains(&block.search) {
-                    anyhow::bail!("Search string not found in {}: {:?}", args.file, block.search);
-                }
-                content = content.replace(&block.search, &block.replace);
+            // Split the argument into lines: first line is the file path, rest are the block(s)
+            let mut lines = arg.lines();
+            let file_path = lines.next().ok_or_else(|| anyhow!("Missing file path"))?.to_string();
+            let block_text: String = lines.collect::<Vec<&str>>().join("\n");
+
+            // Parse blocks from block_text using the markers
+            let mut blocks = Vec::new();
+            let mut remaining = block_text.as_str();
+            while let Some(search_start) = remaining.find("<<<<<<< SEARCH") {
+                let after_search = &remaining[search_start + 15..]; // length of "<<<<<<< SEARCH"
+                let search_end = after_search.find("=======").ok_or_else(|| anyhow!("Missing ======="))?;
+                let search = after_search[..search_end].trim().to_string();
+
+                let after_eq = &after_search[search_end + 7..]; // length of "======="
+                let replace_end = after_eq.find(">>>>>>> REPLACE").ok_or_else(|| anyhow!("Missing >>>>>>> REPLACE"))?;
+                let replace = after_eq[..replace_end].trim().to_string();
+
+                blocks.push((search, replace));
+                remaining = &after_eq[replace_end + 15..]; // length of ">>>>>>> REPLACE"
             }
-            fs::write(&args.file, &content).await?;
-            Ok(format!("Applied {} block(s) to {}", args.blocks.len(), args.file))
+
+            if blocks.is_empty() {
+                anyhow::bail!("No valid search/replace blocks found");
+            }
+
+            let mut content = fs::read_to_string(&file_path).await?;
+            for (search, replace) in &blocks {
+                if !content.contains(search) {
+                    anyhow::bail!("Search string not found in {}: {:?}", file_path, search);
+                }
+                content = content.replace(search, replace);
+            }
+            fs::write(&file_path, &content).await?;
+            Ok(format!("Applied {} block(s) to {}", blocks.len(), file_path))
         }
         "run_command" => {
             let output = Command::new("sh")

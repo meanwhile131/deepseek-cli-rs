@@ -118,13 +118,8 @@ async fn main() -> Result<()> {
     };
     println!("System prompt loaded. Type your messages (type '/exit' to quit):");
 
-    // Setup rustyline editor for line editing with arrow keys
+    // Setup rustyline editor for line editing with arrow keys (in-memory history only)
     let rl = Arc::new(Mutex::new(DefaultEditor::new()?));
-    // Load history if exists
-    {
-        let mut rl_guard = rl.lock().unwrap();
-        let _ = rl_guard.load_history(".deepseek_history");
-    }
 
     loop {
         // Use rustyline for line editing with arrow keys
@@ -298,10 +293,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Save history
-    if let Err(e) = rl.lock().unwrap().save_history(".deepseek_history") {
-        eprintln!("Failed to save history: {}", e);
-    }
+    
 
     Ok(())
 }

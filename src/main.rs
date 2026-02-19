@@ -43,8 +43,8 @@ async fn main() -> Result<()> {
             chat_id.clone(),
             prompt,
             parent_id,
-            false, // search
-            false, // thinking
+            true, // search
+            true, // thinking
         );
         pin_mut!(stream);
 
@@ -105,8 +105,8 @@ async fn main() -> Result<()> {
                 chat_id.clone(),
                 next_prompt,
                 parent_id,
-                false,
-                false,
+                true, // search
+                true, // thinking
             );
             pin_mut!(stream2);
 

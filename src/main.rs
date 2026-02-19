@@ -55,12 +55,23 @@ async fn main() -> Result<()> {
         env::var("DEEPSEEK_TOKEN").expect("DEEPSEEK_TOKEN environment variable must be set");
 
     let api = DeepSeekAPI::new(token).await?;
-    let chat = api.create_chat().await?;
-    let chat_id = chat.id.clone();
-    println!("Chat created with ID: {}", chat_id);
+
+    let args: Vec<String> = env::args().collect();
+    let (chat_id, mut parent_id) = if args.len() > 1 {
+        let id = args[1].clone();
+        println!("Resuming chat with ID: {}", &id);
+        // For simplicity, we do not fetch previous messages.
+        // New messages will be sent to the same chat, but may not be threaded to previous ones.
+        let chat =  api.get_chat_info(&id).await?;
+        (id, chat.current_message_id)
+    } else {
+        let chat = api.create_chat().await?;
+        let id = chat.id;
+        println!("Chat created with ID: {}", id);
+        (id, None)
+    };
     println!("System prompt loaded. Type your messages (type '/exit' to quit):");
 
-    let mut parent_id: Option<i64> = None;
     let stdin = BufReader::new(tokio::io::stdin());
     let mut lines = stdin.lines();
 

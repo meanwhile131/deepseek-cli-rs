@@ -3,6 +3,7 @@ use deepseek_api::{DeepSeekAPI, StreamChunk, models::Message};
 use futures_util::{Stream, StreamExt, pin_mut};
 use std::env;
 use std::io::Write;
+use std::path::Path;
 
 use tokio::fs;
 

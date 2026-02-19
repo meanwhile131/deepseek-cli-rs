@@ -3,10 +3,12 @@ use deepseek_api::{DeepSeekAPI, StreamChunk, models::Message};
 use futures_util::{Stream, StreamExt, pin_mut};
 use std::env;
 use std::io::Write;
-use tokio::io::{AsyncBufReadExt, BufReader};
+
 mod tools;
 use colored::*;
 use tools::SYSTEM_PROMPT;
+use rustyline::{DefaultEditor, error::ReadlineError};
+use std::sync::{Arc, Mutex};
 
 async fn handle_stream<S>(stream: S) -> Result<Option<Message>>
 where
@@ -72,16 +74,40 @@ async fn main() -> Result<()> {
     };
     println!("System prompt loaded. Type your messages (type '/exit' to quit):");
 
-    let stdin = BufReader::new(tokio::io::stdin());
-    let mut lines = stdin.lines();
+    // Setup rustyline editor for line editing with arrow keys
+    let rl = Arc::new(Mutex::new(DefaultEditor::new()?));
+    // Load history if exists
+    {
+        let mut rl_guard = rl.lock().unwrap();
+        let _ = rl_guard.load_history(".deepseek_history");
+    }
 
     loop {
-        print!("{}", "> ".cyan().bold());
-        std::io::stdout().flush()?;
-        let line = match lines.next_line().await? {
-            Some(l) => l,
-            None => break,
+        // Use rustyline for line editing with arrow keys
+        let rl_clone = rl.clone();
+        let prompt = format!("{}", "> ".cyan().bold());
+        let line_result = tokio::task::spawn_blocking(move || {
+            let mut rl_guard = rl_clone.lock().unwrap();
+            rl_guard.readline(&prompt)
+        }).await;
+
+        let line = match line_result {
+            Ok(Ok(l)) => l,
+            Ok(Err(ReadlineError::Eof)) | Ok(Err(ReadlineError::Interrupted)) => break,
+            Ok(Err(e)) => {
+                eprintln!("Input error: {}", e);
+                continue;
+            }
+            Err(e) => {
+                eprintln!("Spawn blocking error: {}", e);
+                continue;
+            }
         };
+
+        // Add to history
+        if let Err(e) = rl.lock().unwrap().add_history_entry(&line) {
+            eprintln!("Failed to add history entry: {}", e);
+        }
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
@@ -184,6 +210,11 @@ async fn main() -> Result<()> {
                 break;
             }
         }
+    }
+
+    // Save history
+    if let Err(e) = rl.lock().unwrap().save_history(".deepseek_history") {
+        eprintln!("Failed to save history: {}", e);
     }
 
     Ok(())

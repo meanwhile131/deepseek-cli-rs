@@ -99,16 +99,13 @@ async fn read_deepseek_context() -> Result<Option<String>> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let token = load_token().await?;
-
     let api = DeepSeekAPI::new(token).await?;
 
     let args: Vec<String> = env::args().collect();
-    let (chat_id, mut parent_id) = if args.len() > 1 {
+    let (chat_id, parent_id) = if args.len() > 1 {
         let id = args[1].clone();
         println!("Resuming chat with ID: {}", &id);
-        // For simplicity, we do not fetch previous messages.
-        // New messages will be sent to the same chat, but may not be threaded to previous ones.
-        let chat =  api.get_chat_info(&id).await?;
+        let chat = api.get_chat_info(&id).await?;
         (id, chat.current_message_id)
     } else {
         let chat = api.create_chat().await?;
@@ -121,6 +118,10 @@ async fn main() -> Result<()> {
     // Setup rustyline editor for line editing with arrow keys (in-memory history only)
     let rl = Arc::new(Mutex::new(DefaultEditor::new()?));
 
+    run_chat(api, chat_id, parent_id, rl).await
+}
+
+async fn run_chat(api: DeepSeekAPI, chat_id: String, mut parent_id: Option<i64>, rl: Arc<Mutex<DefaultEditor>>) -> Result<()> {
     loop {
         // Use rustyline for line editing with arrow keys
         let rl_clone = rl.clone();
@@ -182,115 +183,115 @@ async fn main() -> Result<()> {
         };
         parent_id = current_msg.message_id;
 
-        // Automatic tool‑calling loop
+        // Handle tool calls loop
         loop {
-            let lines: Vec<&str> = current_msg.content.lines().collect();
-            let mut i = 0;
-            let mut invocations = Vec::new();
-
-            while i < lines.len() {
-                let line = lines[i].trim();
-                if let Some(stripped) = line.strip_prefix("TOOL:") {
-                    // Found a tool invocation start
-                    let tool_line = stripped.trim(); // after "TOOL:"
-                    // Split tool_line into name and optional first argument
-                    let mut tool_parts = tool_line.splitn(2, ' ');
-                    let tool_name = tool_parts.next().unwrap_or("").to_string();
-                    let first_arg = tool_parts.next().unwrap_or("").to_string();
-
-                    // Collect subsequent lines until next TOOL: or end
-                    let mut body_lines = Vec::new();
-                    i += 1;
-                    while i < lines.len() && !lines[i].trim().starts_with("TOOL:") {
-                        body_lines.push(lines[i]);
-                        i += 1;
-                    }
-                    // body_lines contains the raw lines (preserve newlines)
-                    let body = body_lines.join("\n");
-
-                    // Combine first_arg and body into the full argument string
-                    let full_arg = if body.is_empty() {
-                        first_arg
-                    } else {
-                        format!("{first_arg}\n{body}")
-                    };
-                    invocations.push((tool_name, full_arg));
-                } else {
-                    i += 1;
+            match handle_tool_calls(&api, &chat_id, current_msg, &mut parent_id).await? {
+                Some(new_msg) => {
+                    current_msg = new_msg;
                 }
+                None => break,
             }
+        }
+    }
+    Ok(())
+}
 
-            if invocations.is_empty() {
-                break;
+async fn handle_tool_calls(api: &DeepSeekAPI, chat_id: &str, mut current_msg: Message, parent_id: &mut Option<i64>) -> Result<Option<Message>> {
+    let lines: Vec<&str> = current_msg.content.lines().collect();
+    let mut i = 0;
+    let mut invocations = Vec::new();
+
+    while i < lines.len() {
+        let line = lines[i].trim();
+        if let Some(stripped) = line.strip_prefix("TOOL:") {
+            let tool_line = stripped.trim();
+            let mut tool_parts = tool_line.splitn(2, ' ');
+            let tool_name = tool_parts.next().unwrap_or("").to_string();
+            let first_arg = tool_parts.next().unwrap_or("").to_string();
+
+            let mut body_lines = Vec::new();
+            i += 1;
+            while i < lines.len() && !lines[i].trim().starts_with("TOOL:") {
+                body_lines.push(lines[i]);
+                i += 1;
             }
+            let body = body_lines.join("\n");
 
-            // Execute all requested tools
-            let mut results = Vec::new();
-            for (tool_name, full_arg) in invocations {
-                match execute_tool(&tool_name, &full_arg).await {
-                    Ok(output) => {
-                        // Print a concise status to the console
-                        let status = match tool_name.as_str() {
-                            "read_file" => {
-                                let path = full_arg.lines().next().unwrap_or("?");
-                                format!("Read file at {path}")
-                            }
-                            "apply_search_replace" => {
-                                // output is already concise: "Applied X block(s) to Y"
-                                output.clone()
-                            }
-                            "list_files" => {
-                                let count = output.lines().count();
-                                let dir = full_arg.lines().next().unwrap_or("?");
-                                format!("Listed {count} files in {dir}")
-                            }
-                            "create_directory" => {
-                                output.clone() // already concise
-                            }
-                            "run_command" => {
-                                // Extract exit code from output if present
-                                let exit_code = if output.starts_with("EXIT_CODE:") {
-                                    if let Some(line) = output.lines().next() {
-                                        line.strip_prefix("EXIT_CODE:").and_then(|s| s.parse::<i32>().ok()).unwrap_or(-1)
-                                    } else { -1 }
-                                } else { -1 };
-                                if exit_code == 0 {
-                                    "Command succeeded (exit code: 0)".to_string()
-                                } else {
-                                    format!("Command failed (exit code: {exit_code})")
-                                }
-                            }
-                            _ => format!("Executed tool: {tool_name}"),
-                        };
-                        println!("{}", status.cyan());
-                        results.push(format!("TOOL RESULT for {tool_name}:\n{output}"));
-                    }
-                    Err(e) => {
-                        eprintln!("{}", format!("Tool {tool_name} failed: {e}").red());
-                        results.push(format!("TOOL {tool_name} failed: {e}"));
-                    }
-                }
-            }
-
-            // Send tool results back as a new user message
-            let next_prompt = results.join("\n\n") + "\n\nContinue with the next step or provide the final answer.";
-            let stream2 = api.complete_stream(
-                chat_id.clone(),
-                next_prompt,
-                parent_id,
-                true, // search
-                true, // thinking
-            );
-            if let Some(msg) = handle_stream(stream2).await? {
-                current_msg = msg;
-                parent_id = current_msg.message_id;
+            // Fix: avoid leading newline when first_arg is empty
+            let full_arg = if body.is_empty() {
+                first_arg
+            } else if first_arg.is_empty() {
+                body
             } else {
-                break;
+                format!("{first_arg}\n{body}")
+            };
+            invocations.push((tool_name, full_arg));
+        } else {
+            i += 1;
+        }
+    }
+
+    if invocations.is_empty() {
+        return Ok(None);
+    }
+
+    let mut results = Vec::new();
+    for (tool_name, full_arg) in invocations {
+        match execute_tool(&tool_name, &full_arg).await {
+            Ok(output) => {
+                let status = match tool_name.as_str() {
+                    "read_file" => {
+                        let path = full_arg.lines().next().unwrap_or("?");
+                        format!("Read file at {path}")
+                    }
+                    "apply_search_replace" => {
+                        output.clone()
+                    }
+                    "list_files" => {
+                        let count = output.lines().count();
+                        let dir = full_arg.lines().next().unwrap_or("?");
+                        format!("Listed {count} files in {dir}")
+                    }
+                    "create_directory" => {
+                        output.clone()
+                    }
+                    "run_command" => {
+                        let exit_code = if output.starts_with("EXIT_CODE:") {
+                            if let Some(line) = output.lines().next() {
+                                line.strip_prefix("EXIT_CODE:").and_then(|s| s.parse::<i32>().ok()).unwrap_or(-1)
+                            } else { -1 }
+                        } else { -1 };
+                        if exit_code == 0 {
+                            "Command succeeded (exit code: 0)".to_string()
+                        } else {
+                            format!("Command failed (exit code: {exit_code})")
+                        }
+                    }
+                    _ => format!("Executed tool: {tool_name}"),
+                };
+                println!("{}", status.cyan());
+                results.push(format!("TOOL RESULT for {tool_name}:\n{output}"));
+            }
+            Err(e) => {
+                eprintln!("{}", format!("Tool {tool_name} failed: {e}").red());
+                results.push(format!("TOOL {tool_name} failed: {e}"));
             }
         }
     }
 
-    
-
-    Ok(())
+    let next_prompt = results.join("\n\n") + "\n\nContinue with the next step or provide the final answer.";
+    let stream = api.complete_stream(
+        chat_id.to_string(),
+        next_prompt,
+        parent_id.clone(),
+        true,
+        true,
+    );
+    let new_msg = handle_stream(stream).await?;
+    if let Some(msg) = new_msg {
+        *parent_id = msg.message_id;
+        Ok(Some(msg))
+    } else {
+        Ok(None)
+    }
 }

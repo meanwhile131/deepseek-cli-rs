@@ -38,3 +38,6 @@ Available tools:
 To build: `cargo build`
 To run: `cargo run [chat-id]`
 To test: `cargo clippy`
+
+## Recent Changes
+- Refactored `src/main.rs`: split the large `main` function into smaller functions (`run_chat`, `handle_tool_calls`) to reduce line count and address `clippy::pedantic` warning.

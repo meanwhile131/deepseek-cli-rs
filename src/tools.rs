@@ -20,7 +20,7 @@ To use a tool, output a line starting with "TOOL:" followed by the tool name and
   The search must match exactly.
 - run_command <command_string>                     : runs a shell command (using sh -c) and returns its stdout/stderr. Use with caution.
 
-After using a tool, you will receive the result in the next user message, prefixed with "TOOL RESULT:".
+After using a tool, you will receive the result in the next user message.
 You can then continue the conversation or use another tool.
 When you have the final answer, just output it normally without any "TOOL:" line.
 "#;

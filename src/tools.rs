@@ -9,7 +9,7 @@ To use a tool, output a line starting with "TOOL:" followed by the tool name and
 - list_files <directory>                         : lists all files and directories in the given directory (non‑recursive)
 - read_file <file_path>                           : outputs the text contents of a file
 - create_directory <dir>                           : creates a directory (and any missing parents)
-- edit_file <json>                                 : applies one or more search/replace blocks to a file. The JSON must have the format:
+- apply_search_replace <json>                      : applies one or more search/replace blocks to a file. The JSON must have the format:
     {"file": "<file_path>", "blocks": [{"search": "...", "replace": "..."}, ...]}
     Each block will be applied sequentially to the current file content. The search must match exactly.
 - run_command <command_string>                     : runs a shell command (using sh -c) and returns its stdout/stderr. Use with caution.
@@ -56,9 +56,9 @@ pub async fn execute_tool(name: &str, arg: &str) -> Result<String> {
             fs::create_dir_all(arg).await?;
             Ok(format!("Directory created: {}", arg))
         }
-        "edit_file" => {
+        "apply_search_replace" => {
             let args: EditFileArgs = serde_json::from_str(arg)
-                .map_err(|e| anyhow!("Invalid JSON for edit_file: {}", e))?;
+                .map_err(|e| anyhow!("Invalid JSON for apply_search_replace: {}", e))?;
             let mut content = fs::read_to_string(&args.file).await?;
             for block in &args.blocks {
                 if !content.contains(&block.search) {

@@ -212,34 +212,44 @@ async fn run_chat(api: DeepSeekAPI, chat_id: String, mut parent_id: Option<i64>,
         };
         parent_id = current_msg.message_id;
 
-        // Check for empty response and reprompt with warning until non-empty
-        while current_msg.content.trim().is_empty() {
-            eprintln!("{}", "Model returned empty response, reprompting with warning...".yellow());
-            let warning = "WARNING: Your previous response was empty. Please provide a meaningful response or use tools as appropriate.\n\nContinue with the next step or provide the final answer.";
-            let stream = api.complete_stream(
-                chat_id.clone(),
-                warning.to_string(),
-                parent_id,
-                true,
-                true,
-            );
-            let mut rx_inner = tx.subscribe();
-            let new_msg = handle_stream(stream, &mut rx_inner).await?;
-            match new_msg {
-                Some(msg) => {
-                    parent_id = msg.message_id;
-                    current_msg = msg;
-                }
-                None => {
-                    // Stream interrupted during reprompt; go back to user input silently
-                    continue 'outer;
+        loop {
+            // Ensure non-empty response
+            while current_msg.content.trim().is_empty() {
+                eprintln!("{}", "Model returned empty response, reprompting with warning...".yellow());
+                let warning = "WARNING: Your previous response was empty. Please provide a meaningful response or use tools as appropriate.\n\nContinue with the next step or provide the final answer.";
+                let stream = api.complete_stream(
+                    chat_id.clone(),
+                    warning.to_string(),
+                    parent_id,
+                    true,
+                    true,
+                );
+                let mut rx_inner = tx.subscribe();
+                let new_msg = handle_stream(stream, &mut rx_inner).await?;
+                match new_msg {
+                    Some(msg) => {
+                        parent_id = msg.message_id;
+                        current_msg = msg;
+                    }
+                    None => {
+                        // Stream interrupted during reprompt; go back to user input silently
+                        continue 'outer;
+                    }
                 }
             }
-        }
 
-        // Handle tool calls loop
-        while let Some(new_msg) = handle_tool_calls(&api, &chat_id, current_msg, &mut parent_id, &mut rx).await? {
-            current_msg = new_msg;
+            // Handle tool calls
+            match handle_tool_calls(&api, &chat_id, current_msg, &mut parent_id, &mut rx).await? {
+                Some(new_msg) => {
+                    current_msg = new_msg;
+                    // parent_id already updated inside handle_tool_calls
+                    continue;
+                }
+                None => {
+                    // No more tool calls, done with this assistant turn
+                    break;
+                }
+            }
         }
     }
     Ok(())

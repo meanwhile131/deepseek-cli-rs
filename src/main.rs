@@ -6,14 +6,14 @@ use std::io::Write;
 use std::path::Path;
 
 use tokio::fs;
-
+use tokio::sync::watch;
 mod tools;
 use colored::Colorize;
 use tools::{SYSTEM_PROMPT, execute_tool};
 use rustyline::{DefaultEditor, error::ReadlineError};
 use std::sync::{Arc, Mutex};
 
-async fn handle_stream<S>(stream: S) -> Result<Option<Message>>
+async fn handle_stream<S>(stream: S, mut ctrl_rx: watch::Receiver<()>) -> Result<Option<Message>>
 where
     S: Stream<Item = Result<StreamChunk>>,
 {
@@ -21,33 +21,46 @@ where
     let mut final_message = None;
     let mut thinking_started = false;
     let mut content_started = false;
-    while let Some(chunk) = stream.next().await {
-        match chunk? {
-            StreamChunk::Thinking(thought) => {
-                if !thinking_started {
-                    println!("{}", "--- Thinking ---".yellow());
-                    thinking_started = true;
-                }
-                print!("{}", thought.dimmed());
-                std::io::stdout().flush()?;
-            }
-            StreamChunk::Content(text) => {
-                if !content_started {
-                    if thinking_started {
-                        println!("\n{}", "--- End of thinking ---".yellow());
+    loop {
+        tokio::select! {
+            maybe_chunk = stream.next() => {
+                match maybe_chunk {
+                    Some(chunk) => {
+                        match chunk? {
+                            StreamChunk::Thinking(thought) => {
+                                if !thinking_started {
+                                    println!("{}", "--- Thinking ---".yellow());
+                                    thinking_started = true;
+                                }
+                                print!("{}", thought.dimmed());
+                                std::io::stdout().flush()?;
+                            }
+                            StreamChunk::Content(text) => {
+                                if !content_started {
+                                    if thinking_started {
+                                        println!("\n{}", "--- End of thinking ---".yellow());
+                                    }
+                                    println!("{}", "--- Response ---".green());
+                                    content_started = true;
+                                }
+                                print!("{}", text.bright_white());
+                                std::io::stdout().flush()?;
+                            }
+                            StreamChunk::Message(msg) => {
+                                if thinking_started && !content_started {
+                                    println!("\n{}", "--- End of thinking ---".yellow());
+                                }
+                                final_message = Some(msg);
+                                println!(); // newline after content
+                            }
+                        }
                     }
-                    println!("{}", "--- Response ---".green());
-                    content_started = true;
+                    None => break,
                 }
-                print!("{}", text.bright_white());
-                std::io::stdout().flush()?;
             }
-            StreamChunk::Message(msg) => {
-                if thinking_started && !content_started {
-                    println!("\n{}", "--- End of thinking ---".yellow());
-                }
-                final_message = Some(msg);
-                println!(); // newline after content
+            _ = ctrl_rx.changed() => {
+                println!("\n{}", "Stream interrupted by user".yellow());
+                return Ok(None);
             }
         }
     }
@@ -122,6 +135,14 @@ async fn main() -> Result<()> {
 }
 
 async fn run_chat(api: DeepSeekAPI, chat_id: String, mut parent_id: Option<i64>, rl: Arc<Mutex<DefaultEditor>>) -> Result<()> {
+    // Setup Ctrl+C handling
+    let (tx, rx) = watch::channel(());
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            let _ = tx.send(());
+        }
+    });
+
     'outer: loop {
         // Use rustyline for line editing with arrow keys
         let rl_clone = rl.clone();
@@ -133,7 +154,11 @@ async fn run_chat(api: DeepSeekAPI, chat_id: String, mut parent_id: Option<i64>,
 
         let line = match line_result {
             Ok(Ok(l)) => l,
-            Ok(Err(ReadlineError::Eof | ReadlineError::Interrupted)) => break,
+            Ok(Err(ReadlineError::Eof)) => break,
+            Ok(Err(ReadlineError::Interrupted)) => {
+                println!(); // move to next line after ^C
+                continue;
+            }
             Ok(Err(e)) => {
                 eprintln!("Input error: {e}");
                 continue;
@@ -176,7 +201,7 @@ async fn run_chat(api: DeepSeekAPI, chat_id: String, mut parent_id: Option<i64>,
             true, // search
             true, // thinking
         );
-        let final_message = handle_stream(stream).await?;
+        let final_message = handle_stream(stream, rx.clone()).await?;
         let Some(mut current_msg) = final_message else {
             eprintln!("No final message received");
             continue;
@@ -194,7 +219,7 @@ async fn run_chat(api: DeepSeekAPI, chat_id: String, mut parent_id: Option<i64>,
                 true,
                 true,
             );
-            let new_msg = handle_stream(stream).await?;
+            let new_msg = handle_stream(stream, rx.clone()).await?;
             match new_msg {
                 Some(msg) => {
                     parent_id = msg.message_id;
@@ -208,14 +233,14 @@ async fn run_chat(api: DeepSeekAPI, chat_id: String, mut parent_id: Option<i64>,
         }
 
         // Handle tool calls loop
-        while let Some(new_msg) = handle_tool_calls(&api, &chat_id, current_msg, &mut parent_id).await? {
+        while let Some(new_msg) = handle_tool_calls(&api, &chat_id, current_msg, &mut parent_id, rx.clone()).await? {
             current_msg = new_msg;
         }
     }
     Ok(())
 }
 
-async fn handle_tool_calls(api: &DeepSeekAPI, chat_id: &str, current_msg: Message, parent_id: &mut Option<i64>) -> Result<Option<Message>> {
+async fn handle_tool_calls(api: &DeepSeekAPI, chat_id: &str, current_msg: Message, parent_id: &mut Option<i64>, ctrl_rx: watch::Receiver<()>) -> Result<Option<Message>> {
     let lines: Vec<&str> = current_msg.content.lines().collect();
     let mut i = 0;
     let mut invocations = Vec::new();
@@ -303,7 +328,7 @@ async fn handle_tool_calls(api: &DeepSeekAPI, chat_id: &str, current_msg: Messag
         true,
         true,
     );
-    let new_msg = handle_stream(stream).await?;
+    let new_msg = handle_stream(stream, ctrl_rx).await?;
     if let Some(msg) = new_msg {
         *parent_id = msg.message_id;
         Ok(Some(msg))

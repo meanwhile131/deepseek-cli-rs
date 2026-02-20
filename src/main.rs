@@ -6,14 +6,14 @@ use std::io::Write;
 use std::path::Path;
 
 use tokio::fs;
-use tokio::sync::watch;
+use tokio::sync::broadcast;
 mod tools;
 use colored::Colorize;
 use tools::{SYSTEM_PROMPT, execute_tool};
 use rustyline::{DefaultEditor, error::ReadlineError};
 use std::sync::{Arc, Mutex};
 
-async fn handle_stream<S>(stream: S, mut ctrl_rx: watch::Receiver<()>) -> Result<Option<Message>>
+async fn handle_stream<S>(stream: S, ctrl_rx: &mut broadcast::Receiver<()>) -> Result<Option<Message>>
 where
     S: Stream<Item = Result<StreamChunk>>,
 {
@@ -58,7 +58,7 @@ where
                     None => break,
                 }
             }
-            _ = ctrl_rx.changed() => {
+            _ = ctrl_rx.recv() => {
                 println!("\n{}", "Stream interrupted by user".yellow());
                 return Ok(None);
             }
@@ -135,11 +135,14 @@ async fn main() -> Result<()> {
 }
 
 async fn run_chat(api: DeepSeekAPI, chat_id: String, mut parent_id: Option<i64>, rl: Arc<Mutex<DefaultEditor>>) -> Result<()> {
-    // Setup Ctrl+C handling
-    let (tx, rx) = watch::channel(());
+    // Setup Ctrl+C handling using broadcast so each round gets a fresh receiver
+    let (tx, _) = broadcast::channel(1);
+    let tx_task = tx.clone();
     tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            let _ = tx.send(());
+        loop {
+            if tokio::signal::ctrl_c().await.is_ok() {
+                let _ = tx_task.send(());
+            }
         }
     });
 
@@ -201,7 +204,8 @@ async fn run_chat(api: DeepSeekAPI, chat_id: String, mut parent_id: Option<i64>,
             true, // search
             true, // thinking
         );
-        let final_message = handle_stream(stream, rx.clone()).await?;
+        let mut rx = tx.subscribe();
+        let final_message = handle_stream(stream, &mut rx).await?;
         let Some(mut current_msg) = final_message else {
             eprintln!("No final message received");
             continue;
@@ -219,7 +223,8 @@ async fn run_chat(api: DeepSeekAPI, chat_id: String, mut parent_id: Option<i64>,
                 true,
                 true,
             );
-            let new_msg = handle_stream(stream, rx.clone()).await?;
+            let mut rx_inner = tx.subscribe();
+            let new_msg = handle_stream(stream, &mut rx_inner).await?;
             match new_msg {
                 Some(msg) => {
                     parent_id = msg.message_id;
@@ -233,14 +238,14 @@ async fn run_chat(api: DeepSeekAPI, chat_id: String, mut parent_id: Option<i64>,
         }
 
         // Handle tool calls loop
-        while let Some(new_msg) = handle_tool_calls(&api, &chat_id, current_msg, &mut parent_id, rx.clone()).await? {
+        while let Some(new_msg) = handle_tool_calls(&api, &chat_id, current_msg, &mut parent_id, &mut rx).await? {
             current_msg = new_msg;
         }
     }
     Ok(())
 }
 
-async fn handle_tool_calls(api: &DeepSeekAPI, chat_id: &str, current_msg: Message, parent_id: &mut Option<i64>, ctrl_rx: watch::Receiver<()>) -> Result<Option<Message>> {
+async fn handle_tool_calls(api: &DeepSeekAPI, chat_id: &str, current_msg: Message, parent_id: &mut Option<i64>, ctrl_rx: &mut broadcast::Receiver<()>) -> Result<Option<Message>> {
     let lines: Vec<&str> = current_msg.content.lines().collect();
     let mut i = 0;
     let mut invocations = Vec::new();

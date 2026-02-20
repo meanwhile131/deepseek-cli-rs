@@ -9,6 +9,7 @@ This is a Rust-based command-line interface for interacting with the DeepSeek AP
 - Arrow key navigation and command history (via rustyline)
 - Token loaded from env var or config file (~/.config/deepseek-cli/token or ~/.deepseek_token)
 - Project context from DEEPSEEK.md (this file) automatically injected into system prompt
+- Multi-line input using Shift+Enter: press Shift+Enter to insert a newline while typing, Enter to submit the entire message.
 
 ## Architecture
 - `src/main.rs`: Main CLI loop, handles user input, streaming, and tool execution loop.
@@ -46,3 +47,4 @@ To test: `cargo clippy`
 - Renamed the package from "deepseek-cli-rs" to "deepseek-cli" in Cargo.toml.
 - Added automatic reprompting with a warning if the model returns an empty response. The assistant will be reprompted indefinitely until a non‑empty response is received (or the user interrupts). The warning message printed to the terminal is now colored yellow for better visibility.
 - Added Ctrl+C handling: during user input, Ctrl+C now cancels the current line and shows a fresh prompt (does not exit); during streaming, Ctrl+C aborts the stream and returns to input silently (without printing "No final message received").
+- Added multi-line input support using Shift+Enter: now pressing Shift+Enter inserts a newline directly into the input buffer. Enter submits the whole message, which may contain multiple lines. This replaces the previous backslash continuation method.

@@ -13,6 +13,12 @@ use tools::{SYSTEM_PROMPT, execute_tool};
 use rustyline::{DefaultEditor, error::ReadlineError};
 use std::sync::{Arc, Mutex};
 
+enum UserInput {
+    Message(String),
+    Exit,
+    Interrupted,
+}
+
 async fn handle_stream<S>(stream: S, ctrl_rx: &mut broadcast::Receiver<()>) -> Result<Option<Message>>
 where
     S: Stream<Item = Result<StreamChunk>>,
@@ -109,6 +115,47 @@ async fn read_deepseek_context() -> Result<Option<String>> {
     Ok(None)
 }
 
+async fn collect_user_input(rl: Arc<Mutex<DefaultEditor>>) -> UserInput {
+    let prompt = format!("{}", "> ".cyan().bold());
+
+    // Read a single line (which may contain newlines if Shift+Enter was used)
+    let line = loop {
+        let rl_clone = rl.clone();
+        let prompt_clone = prompt.clone();
+        let line_result = tokio::task::spawn_blocking(move || {
+            let mut rl_guard = rl_clone.lock().unwrap();
+            rl_guard.readline(&prompt_clone)
+        }).await;
+
+        match line_result {
+            Ok(Ok(l)) => break l,
+            Ok(Err(ReadlineError::Eof)) => return UserInput::Exit,
+            Ok(Err(ReadlineError::Interrupted)) => {
+                println!();
+                return UserInput::Interrupted;
+            }
+            Ok(Err(e)) => {
+                eprintln!("Input error: {e}");
+                // continue to retry
+            }
+            Err(e) => {
+                eprintln!("Spawn blocking error: {e}");
+                // continue to retry
+            }
+        }
+    };
+
+    let trimmed = line.trim();
+    if trimmed == "/exit" {
+        UserInput::Exit
+    } else if trimmed.is_empty() {
+        // ignore empty input and restart
+        UserInput::Interrupted
+    } else {
+        UserInput::Message(line)
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let token = load_token().await?;
@@ -147,107 +194,83 @@ async fn run_chat(api: DeepSeekAPI, chat_id: String, mut parent_id: Option<i64>,
     });
 
     'outer: loop {
-        // Use rustyline for line editing with arrow keys
-        let rl_clone = rl.clone();
-        let prompt = format!("{}", "> ".cyan().bold());
-        let line_result = tokio::task::spawn_blocking(move || {
-            let mut rl_guard = rl_clone.lock().unwrap();
-            rl_guard.readline(&prompt)
-        }).await;
-
-        let line = match line_result {
-            Ok(Ok(l)) => l,
-            Ok(Err(ReadlineError::Eof)) => break,
-            Ok(Err(ReadlineError::Interrupted)) => {
-                println!(); // move to next line after ^C
-                continue;
-            }
-            Ok(Err(e)) => {
-                eprintln!("Input error: {e}");
-                continue;
-            }
-            Err(e) => {
-                eprintln!("Spawn blocking error: {e}");
-                continue;
-            }
-        };
-
-        // Add to history
-        if let Err(e) = rl.lock().unwrap().add_history_entry(&line) {
-            eprintln!("Failed to add history entry: {e}");
-        }
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if trimmed == "/exit" {
-            break;
-        }
-
-        // Prepend system prompt only on the very first message
-        let prompt = if parent_id.is_none() {
-            let mut base = SYSTEM_PROMPT.to_string();
-            if let Some(ctx) = read_deepseek_context().await? {
-                base.push_str("\n\nProject context from DEEPSEEK.md:\n");
-                base.push_str(&ctx);
-            }
-            format!("{base}\n\nUser: {trimmed}")
-        } else {
-            trimmed.to_string()
-        };
-
-        // Stream the assistant's response
-        let stream = api.complete_stream(
-            chat_id.clone(),
-            prompt,
-            parent_id,
-            true, // search
-            true, // thinking
-        );
-        let mut rx = tx.subscribe();
-        let final_message = handle_stream(stream, &mut rx).await?;
-        let Some(mut current_msg) = final_message else {
-            // Stream was interrupted; return to input prompt silently
-            continue;
-        };
-        parent_id = current_msg.message_id;
-
-        loop {
-            // Ensure non-empty response
-            while current_msg.content.trim().is_empty() {
-                eprintln!("{}", "Model returned empty response, reprompting with warning...".yellow());
-                let warning = "WARNING: Your previous response was empty. Please provide a meaningful response or use tools as appropriate.\n\nContinue with the next step or provide the final answer.";
-                let stream = api.complete_stream(
-                    chat_id.clone(),
-                    warning.to_string(),
-                    parent_id,
-                    true,
-                    true,
-                );
-                let mut rx_inner = tx.subscribe();
-                let new_msg = handle_stream(stream, &mut rx_inner).await?;
-                match new_msg {
-                    Some(msg) => {
-                        parent_id = msg.message_id;
-                        current_msg = msg;
-                    }
-                    None => {
-                        // Stream interrupted during reprompt; go back to user input silently
-                        continue 'outer;
-                    }
-                }
-            }
-
-            // Handle tool calls
-            match handle_tool_calls(&api, &chat_id, current_msg, &mut parent_id, &mut rx).await? {
-                Some(new_msg) => {
-                    current_msg = new_msg;
-                    // parent_id already updated inside handle_tool_calls
+        match collect_user_input(rl.clone()).await {
+            UserInput::Exit => break 'outer,
+            UserInput::Interrupted => {}
+            UserInput::Message(full_input) => {
+                if full_input.is_empty() {
                     continue;
                 }
-                None => {
-                    // No more tool calls, done with this assistant turn
-                    break;
+                // Add full input to history as a single entry
+                if let Err(e) = rl.lock().unwrap().add_history_entry(&full_input) {
+                    eprintln!("Failed to add history entry: {e}");
+                }
+
+                // Prepend system prompt only on the very first message
+                let prompt = if parent_id.is_none() {
+                    let mut base = SYSTEM_PROMPT.to_string();
+                    if let Some(ctx) = read_deepseek_context().await? {
+                        base.push_str("\n\nProject context from DEEPSEEK.md:\n");
+                        base.push_str(&ctx);
+                    }
+                    format!("{base}\n\nUser: {full_input}")
+                } else {
+                    full_input.clone()
+                };
+
+                // Stream the assistant's response
+                let stream = api.complete_stream(
+                    chat_id.clone(),
+                    prompt,
+                    parent_id,
+                    true, // search
+                    true, // thinking
+                );
+                let mut rx = tx.subscribe();
+                let final_message = handle_stream(stream, &mut rx).await?;
+                let Some(mut current_msg) = final_message else {
+                    // Stream was interrupted; return to input prompt silently
+                    continue;
+                };
+                parent_id = current_msg.message_id;
+
+                loop {
+                    // Ensure non-empty response
+                    while current_msg.content.trim().is_empty() {
+                        eprintln!("{}", "Model returned empty response, reprompting with warning...".yellow());
+                        let warning = "WARNING: Your previous response was empty. Please provide a meaningful response or use tools as appropriate.\n\nContinue with the next step or provide the final answer.";
+                        let stream = api.complete_stream(
+                            chat_id.clone(),
+                            warning.to_string(),
+                            parent_id,
+                            true,
+                            true,
+                        );
+                        let mut rx_inner = tx.subscribe();
+                        let new_msg = handle_stream(stream, &mut rx_inner).await?;
+                        match new_msg {
+                            Some(msg) => {
+                                parent_id = msg.message_id;
+                                current_msg = msg;
+                            }
+                            None => {
+                                // Stream interrupted during reprompt; go back to user input silently
+                                continue 'outer;
+                            }
+                        }
+                    }
+
+                    // Handle tool calls
+                    match handle_tool_calls(&api, &chat_id, current_msg, &mut parent_id, &mut rx).await? {
+                        Some(new_msg) => {
+                            current_msg = new_msg;
+                            // parent_id already updated inside handle_tool_calls
+                        }
+                        None => {
+                            // No more tool calls, done with this assistant turn
+                            break;
+                        }
+                    }
                 }
             }
         }

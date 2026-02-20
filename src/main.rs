@@ -3,7 +3,7 @@ use deepseek_api::{DeepSeekAPI, StreamChunk, models::Message};
 use futures_util::{Stream, StreamExt, pin_mut};
 use std::env;
 use std::io::Write;
-use std::path::Path;
+
 
 use tokio::fs;
 use tokio::sync::broadcast;
@@ -104,16 +104,7 @@ async fn load_token() -> Result<String> {
     ))
 }
 
-async fn read_deepseek_context() -> Result<Option<String>> {
-    let path = Path::new("DEEPSEEK.md");
-    if path.exists() {
-        let content = fs::read_to_string(path).await?;
-        if !content.trim().is_empty() {
-            return Ok(Some(content));
-        }
-    }
-    Ok(None)
-}
+
 
 async fn collect_user_input(rl: Arc<Mutex<DefaultEditor>>) -> UserInput {
     let prompt = format!("{}", "> ".cyan().bold());
@@ -208,12 +199,7 @@ async fn run_chat(api: DeepSeekAPI, chat_id: String, mut parent_id: Option<i64>,
 
                 // Prepend system prompt only on the very first message
                 let prompt = if parent_id.is_none() {
-                    let mut base = SYSTEM_PROMPT.to_string();
-                    if let Some(ctx) = read_deepseek_context().await? {
-                        base.push_str("\n\nProject context from DEEPSEEK.md:\n");
-                        base.push_str(&ctx);
-                    }
-                    format!("{base}\n\nUser: {full_input}")
+                    format!("{}\n\nUser: {}", SYSTEM_PROMPT.as_str(), full_input)
                 } else {
                     full_input.clone()
                 };

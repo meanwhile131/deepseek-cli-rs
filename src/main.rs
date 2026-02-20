@@ -207,7 +207,7 @@ async fn run_chat(api: DeepSeekAPI, chat_id: String, mut parent_id: Option<i64>,
         let mut rx = tx.subscribe();
         let final_message = handle_stream(stream, &mut rx).await?;
         let Some(mut current_msg) = final_message else {
-            eprintln!("No final message received");
+            // Stream was interrupted; return to input prompt silently
             continue;
         };
         parent_id = current_msg.message_id;
@@ -231,7 +231,7 @@ async fn run_chat(api: DeepSeekAPI, chat_id: String, mut parent_id: Option<i64>,
                     current_msg = msg;
                 }
                 None => {
-                    eprintln!("{}", "No final message received after warning; proceeding to user input.".yellow());
+                    // Stream interrupted during reprompt; go back to user input silently
                     continue 'outer;
                 }
             }

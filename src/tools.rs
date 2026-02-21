@@ -92,7 +92,16 @@ async fn apply_search_replace_handler(arg: &str) -> Result<String> {
 }
 
 async fn run_command_handler(arg: &str) -> Result<String> {
-    let output = Command::new("sh").arg("-c").arg(arg).output().await?;
+    #[cfg(windows)]
+    let output = Command::new("cmd")
+        .args(&["/c", arg])
+        .output()
+        .await?;
+    #[cfg(not(windows))]
+    let output = Command::new("sh")
+        .args(&["-c", arg])
+        .output()
+        .await?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let exit_code = output.status.code().unwrap_or(-1);
@@ -166,7 +175,7 @@ static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
     m.insert(
         "run_command",
         Tool {
-            description: "run_command <command_string> : runs a shell command (using sh -c) and returns its stdout/stderr. Use with caution.",
+            description: "run_command <command_string> : runs a shell command using the system's default shell and returns its stdout/stderr. Use with caution.",
             handler: Box::new(|s| Box::pin(run_command_handler(s))),
         },
     );
@@ -182,7 +191,7 @@ static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
 
 // Build the system prompt dynamically from the tool registry
 pub static SYSTEM_PROMPT: LazyLock<String> = LazyLock::new(|| {
-    let header = "You are an assistant that can use the following tools to interact with the current directory.\nTo use a tool, output a line starting with \"TOOL:\" followed by the tool name and its argument(s). For tools that require multiple pieces of data, the argument(s) may span multiple lines.\nYou can include multiple tool invocations in one response; they will be executed sequentially.\n\nIMPORTANT: Do NOT simulate or guess the tool results. Only output the tool invocations. After you output them, you will receive a new message containing the actual results (each prefixed with \"TOOL RESULT for <tool>:\"). Then you can continue the conversation based on those real results. Never include your own interpretation of what the tool would return; let the system provide the results.\n\nAdditional tool usage guidelines:\n- For `run_command`, provide the command as a plain string without extra quoting. The tool passes it directly to `sh -c`. If the command contains spaces or special characters, write it naturally; the shell will handle it. For multi-step commands, chain them with `&&` or `;` within the same string, but be mindful of quoting inside the command (e.g., use single quotes inside the string if needed).\n- Before suggesting a command that requires specific dependencies (like `cargo` or `podman`), first check if they exist using `which` or `--version` to provide actionable feedback. If the environment lacks a tool, suggest installation steps rather than assuming it's present.\n- When a tool returns an error (e.g., command not found), interpret it and suggest corrective actions, not just repeat the command. Use the results of `run_command` to decide next steps (e.g., if `cargo check` fails, report the error; if it succeeds, proceed).\n- Always include the exact tool line as specified, with no extra commentary before it. The tool invocation must be the first thing on its own line starting with `TOOL:`.\n- If multiple tool calls are needed, list them sequentially; do not simulate results.\n- For complex commands that include quotes, remember that the tool passes the string directly to `sh -c`. If the command itself contains quotes, use a mix of single and double quotes appropriately. For example, to run `echo 'Hello World'`, write `run_command echo 'Hello World'`. The outer quotes are not needed because the tool does not add them.\n\nAvailable tools:\n\n";
+    let header = "You are an assistant that can use the following tools to interact with the current directory.\nTo use a tool, output a line starting with \"TOOL:\" followed by the tool name and its argument(s). For tools that require multiple pieces of data, the argument(s) may span multiple lines.\nYou can include multiple tool invocations in one response; they will be executed sequentially.\n\nIMPORTANT: Do NOT simulate or guess the tool results. Only output the tool invocations. After you output them, you will receive a new message containing the actual results (each prefixed with \"TOOL RESULT for <tool>:\"). Then you can continue the conversation based on those real results. Never include your own interpretation of what the tool would return; let the system provide the results.\n\nAdditional tool usage guidelines:\n- For `run_command`, provide the command as a plain string without extra quoting. The tool passes it directly to the system's default shell. If the command contains spaces or special characters, write it naturally; the shell will handle it. For multi-step commands, chain them with `&&` or `;` within the same string, but be mindful of quoting inside the command (e.g., use single quotes inside the string if needed).\n- Before suggesting a command that requires specific dependencies (like `cargo` or `podman`), first check if they exist using `which` or `--version` to provide actionable feedback. If the environment lacks a tool, suggest installation steps rather than assuming it's present.\n- When a tool returns an error (e.g., command not found), interpret it and suggest corrective actions, not just repeat the command. Use the results of `run_command` to decide next steps (e.g., if `cargo check` fails, report the error; if it succeeds, proceed).\n- Always include the exact tool line as specified, with no extra commentary before it. The tool invocation must be the first thing on its own line starting with `TOOL:`.\n- If multiple tool calls are needed, list them sequentially; do not simulate results.\n- For complex commands that include quotes, remember that the tool passes the string directly to the system's default shell. If the command itself contains quotes, use a mix of single and double quotes appropriately. For example, to run `echo 'Hello World'`, write `run_command echo 'Hello World'`. The outer quotes are not needed because the tool does not add them.\n\nAvailable tools:\n\n";
     let mut tool_lines: Vec<String> = TOOLS
         .iter()
         .map(|(name, tool)| format!("- {} : {}", name, tool.description))

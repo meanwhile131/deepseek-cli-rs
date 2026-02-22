@@ -6,6 +6,7 @@ use std::pin::Pin;
 use std::sync::LazyLock;
 use tokio::fs;
 use tokio::process::Command;
+use reqwest;
 
 // Tool handler: a function that takes a string argument and returns a boxed future.
 // We use a trait object to allow closures.
@@ -142,6 +143,20 @@ async fn write_file_handler(arg: &str) -> Result<String> {
 }
 
 // Registry of all available tools
+async fn fetch_url_handler(arg: &str) -> Result<String> {
+    let url = arg.trim();
+    if url.is_empty() {
+        anyhow::bail!("URL cannot be empty");
+    }
+    let response = reqwest::get(url).await?;
+    let status = response.status();
+    if !status.is_success() {
+        anyhow::bail!("HTTP error {}: {}", status, url);
+    }
+    let text = response.text().await?;
+    Ok(text)
+}
+
 static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
     let mut m = HashMap::new();
     m.insert(
@@ -184,6 +199,13 @@ static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
         Tool {
             description: "write_file <file_path> : writes the provided content to the file, creating any necessary parent directories. If the file exists, it is overwritten. The content should follow the file path on subsequent lines.",
             handler: Box::new(|s| Box::pin(write_file_handler(s))),
+        },
+    );
+    m.insert(
+        "fetch_url",
+        Tool {
+            description: "fetch_url <url> : fetches the content from the given URL and returns it as text (HTML, JSON, etc.). Useful for browsing the internet for information.",
+            handler: Box::new(|s| Box::pin(fetch_url_handler(s))),
         },
     );
     m

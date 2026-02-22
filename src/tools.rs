@@ -6,7 +6,8 @@ use std::pin::Pin;
 use std::sync::LazyLock;
 use tokio::fs;
 use tokio::process::Command;
-use reqwest;
+use scraper::{Html, Selector};
+use urlencoding::encode;
 
 // Tool handler: a function that takes a string argument and returns a boxed future.
 // We use a trait object to allow closures.
@@ -100,7 +101,7 @@ async fn run_command_handler(arg: &str) -> Result<String> {
         .await?;
     #[cfg(not(windows))]
     let output = Command::new("sh")
-        .args(&["-c", arg])
+        .args(["-c", arg])
         .output()
         .await?;
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -151,19 +152,82 @@ async fn fetch_url_handler(arg: &str) -> Result<String> {
     let response = reqwest::get(url).await?;
     let status = response.status();
     if !status.is_success() {
-        anyhow::bail!("HTTP error {}: {}", status, url);
+        anyhow::bail!("HTTP error {status}: {url}");
     }
     let text = response.text().await?;
     Ok(text)
 }
 
+async fn search_web_handler(arg: &str) -> Result<String> {
+    let query = arg.trim();
+    if query.is_empty() {
+        anyhow::bail!("Search query cannot be empty");
+    }
+    let encoded = encode(query);
+    let url = format!("https://html.duckduckgo.com/html/?q={encoded}");
+    
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+        .build()?;
+    
+    let response = client.get(&url).send().await?;
+    let status = response.status();
+    if !status.is_success() {
+        anyhow::bail!("HTTP error {status} while searching");
+    }
+    let html = response.text().await?;
+    
+    let document = Html::parse_document(&html);
+    let result_selector = Selector::parse("div.result").unwrap();
+    let title_selector = Selector::parse("a.result__a").unwrap();
+    let url_selector = Selector::parse("a.result__a").unwrap();
+    let snippet_selector = Selector::parse("a.result__snippet").unwrap();
+    
+    let base_url = reqwest::Url::parse(&url)?;
+    let mut results = Vec::new();
+    for result in document.select(&result_selector) {
+        let title_elem = result.select(&title_selector).next();
+        let url_elem = result.select(&url_selector).next();
+        let snippet_elem = result.select(&snippet_selector).next();
+        
+        let title = title_elem.map(|e| e.text().collect::<String>()).unwrap_or_default();
+        let href = url_elem.and_then(|e| e.value().attr("href")).unwrap_or("");
+        let absolute_url = base_url.join(href).ok().map(|u| u.to_string()).unwrap_or_default();
+        let snippet = snippet_elem.map(|e| e.text().collect::<String>()).unwrap_or_default();
+        
+        if !title.is_empty() && !absolute_url.is_empty() {
+            results.push(format!("Title: {}\nURL: {}\nSnippet: {}\n---", title.trim(), absolute_url, snippet.trim()));
+        }
+    }
+    
+    if results.is_empty() {
+        Ok("No results found.".to_string())
+    } else {
+        Ok(results.join("\n"))
+    }
+}
+
 static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
     let mut m = HashMap::new();
+    m.insert(
+        "search_web",
+        Tool {
+            description: "search_web <query> : performs a web search using DuckDuckGo and returns a list of results with titles, URLs, and snippets.",
+            handler: Box::new(|s| Box::pin(search_web_handler(s))),
+        },
+    );
     m.insert(
         "list_files",
         Tool {
             description: "list_files <directory> : lists all files and directories in the given directory (non‑recursive)",
             handler: Box::new(|s| Box::pin(list_files_handler(s))),
+        },
+    );
+    m.insert(
+        "search_web",
+        Tool {
+            description: "search_web <query> : performs a web search using DuckDuckGo and returns a list of results with titles, URLs, and snippets.",
+            handler: Box::new(|s| Box::pin(search_web_handler(s))),
         },
     );
     m.insert(
@@ -174,10 +238,24 @@ static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
         },
     );
     m.insert(
+        "search_web",
+        Tool {
+            description: "search_web <query> : performs a web search using DuckDuckGo and returns a list of results with titles, URLs, and snippets.",
+            handler: Box::new(|s| Box::pin(search_web_handler(s))),
+        },
+    );
+    m.insert(
         "create_directory",
         Tool {
             description: "create_directory <dir> : creates a directory (and any missing parents)",
             handler: Box::new(|s| Box::pin(create_directory_handler(s))),
+        },
+    );
+    m.insert(
+        "search_web",
+        Tool {
+            description: "search_web <query> : performs a web search using DuckDuckGo and returns a list of results with titles, URLs, and snippets.",
+            handler: Box::new(|s| Box::pin(search_web_handler(s))),
         },
     );
     m.insert(
@@ -188,10 +266,24 @@ static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
         },
     );
     m.insert(
+        "search_web",
+        Tool {
+            description: "search_web <query> : performs a web search using DuckDuckGo and returns a list of results with titles, URLs, and snippets.",
+            handler: Box::new(|s| Box::pin(search_web_handler(s))),
+        },
+    );
+    m.insert(
         "run_command",
         Tool {
             description: "run_command <command_string> : runs a shell command using the system's default shell and returns its stdout/stderr. Use with caution.",
             handler: Box::new(|s| Box::pin(run_command_handler(s))),
+        },
+    );
+    m.insert(
+        "search_web",
+        Tool {
+            description: "search_web <query> : performs a web search using DuckDuckGo and returns a list of results with titles, URLs, and snippets.",
+            handler: Box::new(|s| Box::pin(search_web_handler(s))),
         },
     );
     m.insert(
@@ -202,10 +294,24 @@ static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
         },
     );
     m.insert(
+        "search_web",
+        Tool {
+            description: "search_web <query> : performs a web search using DuckDuckGo and returns a list of results with titles, URLs, and snippets.",
+            handler: Box::new(|s| Box::pin(search_web_handler(s))),
+        },
+    );
+    m.insert(
         "fetch_url",
         Tool {
             description: "fetch_url <url> : fetches the content from the given URL and returns it as text (HTML, JSON, etc.). Useful for browsing the internet for information.",
             handler: Box::new(|s| Box::pin(fetch_url_handler(s))),
+        },
+    );
+    m.insert(
+        "search_web",
+        Tool {
+            description: "search_web <query> : performs a web search using DuckDuckGo and returns a list of results with titles, URLs, and snippets.",
+            handler: Box::new(|s| Box::pin(search_web_handler(s))),
         },
     );
     m

@@ -168,22 +168,35 @@ async fn search_web_handler(arg: &str) -> Result<String> {
     
     let client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-        .build()?;
+        .build()
+        .map_err(|e| anyhow!("Failed to create HTTP client: {e}"))?;
     
-    let response = client.get(&url).send().await?;
+    let response = client.get(&url).send().await
+        .map_err(|e| anyhow!("Network error while searching: {e}"))?;
     let status = response.status();
+    let html = response.text().await
+        .map_err(|e| anyhow!("Failed to read response body: {e}"))?;
+    
     if !status.is_success() {
+        let lower = html.to_lowercase();
+        if lower.contains("captcha") || lower.contains("unusual traffic") || lower.contains("blocked") {
+            anyhow::bail!("Search engine is blocking the request (possible CAPTCHA or rate limiting). Please try again later.");
+        }
         anyhow::bail!("HTTP error {status} while searching");
     }
-    let html = response.text().await?;
     
     let document = Html::parse_document(&html);
-    let result_selector = Selector::parse("div.result").unwrap();
-    let title_selector = Selector::parse("a.result__a").unwrap();
-    let url_selector = Selector::parse("a.result__a").unwrap();
-    let snippet_selector = Selector::parse("a.result__snippet").unwrap();
+    let result_selector = Selector::parse("div.result")
+        .map_err(|e| anyhow!("Invalid result selector: {e}"))?;
+    let title_selector = Selector::parse("a.result__a")
+        .map_err(|e| anyhow!("Invalid title selector: {e}"))?;
+    let url_selector = Selector::parse("a.result__a")
+        .map_err(|e| anyhow!("Invalid URL selector: {e}"))?;
+    let snippet_selector = Selector::parse("a.result__snippet")
+        .map_err(|e| anyhow!("Invalid snippet selector: {e}"))?;
     
-    let base_url = reqwest::Url::parse(&url)?;
+    let base_url = reqwest::Url::parse(&url)
+        .map_err(|e| anyhow!("Invalid base URL: {e}"))?;
     let mut results = Vec::new();
     for result in document.select(&result_selector) {
         let title_elem = result.select(&title_selector).next();
@@ -192,7 +205,10 @@ async fn search_web_handler(arg: &str) -> Result<String> {
         
         let title = title_elem.map(|e| e.text().collect::<String>()).unwrap_or_default();
         let href = url_elem.and_then(|e| e.value().attr("href")).unwrap_or("");
-        let absolute_url = base_url.join(href).ok().map(|u| u.to_string()).unwrap_or_default();
+        let absolute_url = base_url.join(href)
+            .ok()
+            .map(|u| u.to_string())
+            .unwrap_or_default();
         let snippet = snippet_elem.map(|e| e.text().collect::<String>()).unwrap_or_default();
         
         if !title.is_empty() && !absolute_url.is_empty() {
@@ -201,7 +217,11 @@ async fn search_web_handler(arg: &str) -> Result<String> {
     }
     
     if results.is_empty() {
-        Ok("No results found.".to_string())
+        if html.contains("No results") || html.contains("no results found") {
+            Ok("No results found for the query.".to_string())
+        } else {
+            Ok("No results could be extracted from the search page. The page structure may have changed.".to_string())
+        }
     } else {
         Ok(results.join("\n"))
     }

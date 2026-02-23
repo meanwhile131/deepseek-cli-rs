@@ -274,7 +274,7 @@ static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
     m.insert(
         "search_web",
         Tool {
-            description: "search_web <query> : performs a web search using DuckDuckGo and returns a list of results with titles, URLs, and snippets.",
+            description: "search_web <query> : performs a web search using DuckDuckGo and returns a list of results with titles, URLs, and snippets. DO NOT quote the query string.",
             handler: Box::new(|s| Box::pin(search_web_handler(s))),
         },
     );

@@ -199,7 +199,7 @@ async fn run_chat(api: DeepSeekAPI, chat_id: String, mut parent_id: Option<i64>,
 
                 // Prepend system prompt only on the very first message
                 let prompt = if parent_id.is_none() {
-                    format!("{}\n\nUser: {}", SYSTEM_PROMPT.as_str(), full_input)
+                    format!("{}\n\n{}", SYSTEM_PROMPT.as_str(), full_input)
                 } else {
                     full_input.clone()
                 };

@@ -167,7 +167,6 @@ async fn search_web_handler(arg: &str) -> Result<String> {
     let url = format!("https://html.duckduckgo.com/html/?q={encoded}");
     
     let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
         .build()
         .map_err(|e| anyhow!("Failed to create HTTP client: {e}"))?;
     

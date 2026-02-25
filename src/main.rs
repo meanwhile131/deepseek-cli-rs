@@ -332,6 +332,14 @@ async fn handle_tool_calls(api: &DeepSeekAPI, chat_id: &str, current_msg: Messag
                             format!("Command failed (exit code: {exit_code})")
                         }
                     }
+                    "search_web" => {
+                        let count = if output.contains("No results found") {
+                            0
+                        } else {
+                            output.matches("Title:").count()
+                        };
+                        format!("Executed tool: {tool_name} - found {count} results")
+                    }
                     _ => format!("Executed tool: {tool_name}"),
                 };
                 println!("{}", status.cyan());

@@ -352,7 +352,10 @@ async fn handle_tool_calls(api: &DeepSeekAPI, chat_id: &str, current_msg: Messag
         }
     }
 
-    let next_prompt = results.join("\n\n") + "\n\nContinue with the next step or provide the final answer.";
+    let next_prompt = format!(
+        "{}\n\nREMINDER: Do NOT generate any lines starting with \"TOOL RESULT\" yourself. Only use \"TOOL:\" lines if you need to call another tool. Otherwise, provide your final answer.\n\nContinue with the next step or provide the final answer.",
+        results.join("\n\n")
+    );
     let stream = api.complete_stream(
         chat_id.to_string(),
         next_prompt,

@@ -178,8 +178,8 @@ async fn search_web_handler(arg: &str) -> Result<String> {
     
     if !status.is_success() {
         let lower = html.to_lowercase();
-        if lower.contains("captcha") || lower.contains("unusual traffic") || lower.contains("blocked") {
-            anyhow::bail!("Search engine is blocking the request (possible CAPTCHA or rate limiting). Please try again later.");
+        if lower.contains("anomaly-modal") {
+            anyhow::bail!("Search engine is blocking the request. Please try again later.");
         }
         anyhow::bail!("HTTP error {status} while searching");
     }

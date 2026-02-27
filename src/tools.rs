@@ -314,9 +314,27 @@ fn browser_click_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<String
         let state_arc = ensure_browser_initialized().await?;
         let mut guard = state_arc.lock().await;
         let state = guard.as_mut().unwrap();
-        let element = state.current_page().find_element(selector).await?;
-        element.click().await?;
-        Ok(format!("Clicked element: {selector}"))
+        
+        let start = std::time::Instant::now();
+        let timeout_duration = Duration::from_secs(30);
+        let element = loop {
+            if start.elapsed() > timeout_duration {
+                return Err(anyhow!("Timeout waiting for element '{}' after 30 seconds", selector));
+            }
+            match state.current_page().find_element(selector).await {
+                Ok(e) => break e,
+                Err(_) => {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    continue;
+                }
+            }
+        };
+        
+        match timeout(Duration::from_secs(10), element.click()).await {
+            Ok(Ok(_)) => Ok(format!("Clicked element: {}", selector)),
+            Ok(Err(e)) => Err(anyhow!("Error clicking element: {}", e)),
+            Err(_) => Err(anyhow!("Timeout clicking element '{}' after 10 seconds", selector)),
+        }
     })
 }
 

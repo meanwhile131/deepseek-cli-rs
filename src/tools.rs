@@ -315,23 +315,15 @@ fn browser_click_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<String
         let mut guard = state_arc.lock().await;
         let state = guard.as_mut().unwrap();
         
-        let start = std::time::Instant::now();
-        let timeout_duration = Duration::from_secs(30);
-        let element = loop {
-            if start.elapsed() > timeout_duration {
-                return Err(anyhow!("Timeout waiting for element '{selector}' after 30 seconds"));
-            }
-            if let Ok(e) = state.current_page().find_element(selector).await {
-                break e;
-            }
-            tokio::time::sleep(Duration::from_millis(500)).await;
-        };
+        // Find element - fail immediately if not found
+        let element = state.current_page().find_element(selector).await
+            .map_err(|_| anyhow!("Element '{}' not found", selector))?;
         
-        match timeout(Duration::from_secs(10), element.click()).await {
-            Ok(Ok(_)) => Ok(format!("Clicked element: {selector}")),
-            Ok(Err(e)) => Err(anyhow!("Error clicking element: {e}")),
-            Err(_) => Err(anyhow!("Timeout clicking element '{selector}' after 10 seconds")),
-        }
+        // Click element
+        element.click().await
+            .map_err(|e| anyhow!("Error clicking element: {}", e))?;
+        
+        Ok(format!("Clicked element: {selector}"))
     })
 }
 
@@ -349,7 +341,9 @@ fn browser_type_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<String>
         let state_arc = ensure_browser_initialized().await?;
         let mut guard = state_arc.lock().await;
         let state = guard.as_mut().unwrap();
-        let element = state.current_page().find_element(selector).await?;
+        
+        let element = state.current_page().find_element(selector).await
+            .map_err(|_| anyhow!("Element '{}' not found", selector))?;
         element.type_str(text).await?;
         Ok(format!("Typed '{text}' into {selector}"))
     })

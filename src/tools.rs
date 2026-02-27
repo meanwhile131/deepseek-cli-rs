@@ -12,6 +12,7 @@ use std::sync::LazyLock;
 use tokio::fs;
 use tokio::process::Command;
 use tokio::sync::Mutex;
+use tokio::time::{timeout, Duration};
 use urlencoding::encode;
 
 struct Tool {
@@ -407,11 +408,16 @@ fn browser_new_tab_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<Stri
         let state_arc = ensure_browser_initialized().await?;
         let mut guard = state_arc.lock().await;
         let state = guard.as_mut().unwrap();
-        let new_page = state.browser.new_page(url).await?;
-        state.pages.push(new_page);
-        let new_idx = state.pages.len() - 1;
-        state.current_idx = new_idx;
-        Ok(format!("Opened new tab {} with URL: {}", new_idx + 1, url))
+        match timeout(Duration::from_secs(30), state.browser.new_page(url)).await {
+            Ok(result) => {
+                let new_page = result.map_err(|e| anyhow::anyhow!("Failed to open new page: {}", e))?;
+                state.pages.push(new_page);
+                let new_idx = state.pages.len() - 1;
+                state.current_idx = new_idx;
+                Ok(format!("Opened new tab {} with URL: {}", new_idx + 1, url))
+            }
+            Err(_) => Err(anyhow::anyhow!("Timeout opening new tab after 30 seconds")),
+        }
     })
 }
 

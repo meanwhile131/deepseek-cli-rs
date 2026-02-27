@@ -532,6 +532,20 @@ fn browser_quit_handler(_arg: &str) -> Pin<Box<dyn Future<Output = Result<String
     })
 }
 
+fn browser_wait_for_navigation_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+    Box::pin(async move {
+        let timeout_secs = arg.trim().parse::<u64>().unwrap_or(30);
+        let state_arc = ensure_browser_initialized().await?;
+        let mut guard = state_arc.lock().await;
+        let state = guard.as_mut().unwrap();
+        match timeout(Duration::from_secs(timeout_secs), state.current_page().wait_for_navigation()).await {
+            Ok(Ok(_)) => Ok("Page finished navigation".to_string()),
+            Ok(Err(e)) => Err(anyhow!("Error during navigation: {}", e)),
+            Err(_) => Err(anyhow!("Timeout waiting for navigation after {} seconds", timeout_secs)),
+        }
+    })
+}
+
 static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
     let mut m = HashMap::new();
     m.insert(
@@ -672,6 +686,13 @@ static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
         Tool {
             description: "browser_quit : Closes the browser and all tabs, shutting down the browser process.",
             handler: Box::new(|s| Box::pin(browser_quit_handler(s))),
+        },
+    );
+    m.insert(
+        "browser_wait_for_navigation",
+        Tool {
+            description: "browser_wait_for_navigation [timeout] : Waits for the current page to finish loading. Optional timeout in seconds (default 30).",
+            handler: Box::new(|s| Box::pin(browser_wait_for_navigation_handler(s))),
         },
     );
     m

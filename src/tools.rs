@@ -52,7 +52,6 @@ async fn create_directory_handler(arg: &str) -> Result<String> {
 }
 
 async fn apply_search_replace_handler(arg: &str) -> Result<String> {
-    // Split the argument into lines: first line is the file path, rest are the block(s)
     let mut lines = arg.lines();
     let file_path = lines
         .next()
@@ -60,24 +59,23 @@ async fn apply_search_replace_handler(arg: &str) -> Result<String> {
         .to_string();
     let block_text: String = lines.collect::<Vec<&str>>().join("\n");
 
-    // Parse blocks from block_text using the markers
     let mut blocks = Vec::new();
     let mut remaining = block_text.as_str();
     while let Some(search_start) = remaining.find("<<<<<<< SEARCH") {
-        let after_search = &remaining[search_start + 15..]; // length of "<<<<<<< SEARCH"
+        let after_search = &remaining[search_start + 15..];
         let search_end = after_search
             .find("=======")
             .ok_or_else(|| anyhow!("Missing ======="))?;
         let search = after_search[..search_end].trim().to_string();
 
-        let after_eq = &after_search[search_end + 7..]; // length of "======="
+        let after_eq = &after_search[search_end + 7..];
         let replace_end = after_eq
             .find(">>>>>>> REPLACE")
             .ok_or_else(|| anyhow!("Missing >>>>>>> REPLACE"))?;
         let replace = after_eq[..replace_end].trim().to_string();
 
         blocks.push((search, replace));
-        remaining = &after_eq[replace_end + 15..]; // length of ">>>>>>> REPLACE"
+        remaining = &after_eq[replace_end + 15..];
     }
 
     if blocks.is_empty() {
@@ -126,7 +124,6 @@ async fn run_command_handler(arg: &str) -> Result<String> {
 }
 
 async fn write_file_handler(arg: &str) -> Result<String> {
-    // Split at first newline: first line is file path, rest is content
     let mut lines = arg.lines();
     let file_path = lines
         .next()
@@ -134,7 +131,6 @@ async fn write_file_handler(arg: &str) -> Result<String> {
         .to_string();
     let content: String = lines.collect::<Vec<&str>>().join("\n");
 
-    // Ensure parent directory exists
     if let Some(parent) = Path::new(&file_path).parent() {
         fs::create_dir_all(parent).await?;
     }
@@ -244,7 +240,8 @@ async fn search_web_handler(arg: &str) -> Result<String> {
 struct BrowserState {
     browser: Browser,
     handler_task: tokio::task::JoinHandle<()>,
-    current_page: Page,
+    pages: Vec<Page>,
+    current_idx: usize,
 }
 
 impl BrowserState {
@@ -261,8 +258,17 @@ impl BrowserState {
         Ok(Self {
             browser,
             handler_task,
-            current_page: page,
+            pages: vec![page],
+            current_idx: 0,
         })
+    }
+
+    fn current_page(&self) -> &Page {
+        &self.pages[self.current_idx]
+    }
+
+    fn current_page_mut(&mut self) -> &mut Page {
+        &mut self.pages[self.current_idx]
     }
 }
 
@@ -293,7 +299,7 @@ fn browser_open_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<String>
         let state_arc = ensure_browser_initialized().await?;
         let mut guard = state_arc.lock().await;
         let state = guard.as_mut().unwrap();
-        state.current_page.goto(url).await?;
+        state.current_page_mut().goto(url).await?;
         Ok(format!("Opened URL: {url}"))
     })
 }
@@ -307,7 +313,7 @@ fn browser_click_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<String
         let state_arc = ensure_browser_initialized().await?;
         let mut guard = state_arc.lock().await;
         let state = guard.as_mut().unwrap();
-        let element = state.current_page.find_element(selector).await?;
+        let element = state.current_page().find_element(selector).await?;
         element.click().await?;
         Ok(format!("Clicked element: {selector}"))
     })
@@ -315,7 +321,6 @@ fn browser_click_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<String
 
 fn browser_type_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
     Box::pin(async move {
-        // Expect format: "selector text"
         let mut parts = arg.splitn(2, ' ');
         let selector = parts
             .next()
@@ -328,7 +333,7 @@ fn browser_type_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<String>
         let state_arc = ensure_browser_initialized().await?;
         let mut guard = state_arc.lock().await;
         let state = guard.as_mut().unwrap();
-        let element = state.current_page.find_element(selector).await?;
+        let element = state.current_page().find_element(selector).await?;
         element.type_str(text).await?;
         Ok(format!("Typed '{text}' into {selector}"))
     })
@@ -341,7 +346,7 @@ fn browser_get_html_handler(
         let state_arc = ensure_browser_initialized().await?;
         let mut guard = state_arc.lock().await;
         let state = guard.as_mut().unwrap();
-        let content = state.current_page.content().await?;
+        let content = state.current_page().content().await?;
         Ok(content)
     })
 }
@@ -353,7 +358,10 @@ fn browser_go_back_handler(
         let state_arc = ensure_browser_initialized().await?;
         let mut guard = state_arc.lock().await;
         let state = guard.as_mut().unwrap();
-        state.current_page.evaluate("window.history.back()").await?;
+        state
+            .current_page()
+            .evaluate("window.history.back()")
+            .await?;
         Ok("Navigated back".to_string())
     })
 }
@@ -366,7 +374,7 @@ fn browser_refresh_handler(
         let mut guard = state_arc.lock().await;
         let state = guard.as_mut().unwrap();
         state
-            .current_page
+            .current_page()
             .evaluate("window.location.reload()")
             .await?;
         Ok("Page refreshed".to_string())
@@ -384,11 +392,105 @@ fn browser_evaluate_handler(
         let state_arc = ensure_browser_initialized().await?;
         let mut guard = state_arc.lock().await;
         let state = guard.as_mut().unwrap();
-        let result = state.current_page.evaluate(js).await?;
+        let result = state.current_page().evaluate(js).await?;
         let result_value = result.value();
         let result_str = serde_json::to_string(&result_value)
             .unwrap_or_else(|_| "<serialization error>".to_string());
         Ok(format!("Evaluation result: {result_str}"))
+    })
+}
+
+fn browser_new_tab_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+    Box::pin(async move {
+        let url = arg.trim();
+        let url = if url.is_empty() { "about:blank" } else { url };
+        let state_arc = ensure_browser_initialized().await?;
+        let mut guard = state_arc.lock().await;
+        let state = guard.as_mut().unwrap();
+        let new_page = state.browser.new_page(url).await?;
+        state.pages.push(new_page);
+        let new_idx = state.pages.len() - 1;
+        state.current_idx = new_idx;
+        Ok(format!("Opened new tab {} with URL: {}", new_idx + 1, url))
+    })
+}
+
+fn browser_close_tab_handler(
+    arg: &str,
+) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+    Box::pin(async move {
+        let state_arc = ensure_browser_initialized().await?;
+        let mut guard = state_arc.lock().await;
+        let state = guard.as_mut().unwrap();
+        if state.pages.len() <= 1 {
+            return Err(anyhow!("Cannot close the last tab"));
+        }
+        let idx = if arg.trim().is_empty() {
+            state.current_idx
+        } else {
+            let idx = arg
+                .trim()
+                .parse::<usize>()
+                .map_err(|_| anyhow!("Invalid tab index"))?
+                .checked_sub(1)
+                .ok_or_else(|| anyhow!("Tab index must be >= 1"))?;
+            if idx >= state.pages.len() {
+                return Err(anyhow!("Tab index out of range"));
+            }
+            idx
+        };
+        state.pages.remove(idx);
+        if state.current_idx >= idx {
+            if state.current_idx == idx {
+                state.current_idx = state.current_idx.saturating_sub(1);
+            } else {
+                state.current_idx -= 1;
+            }
+        }
+        Ok(format!("Closed tab {}", idx + 1))
+    })
+}
+
+fn browser_switch_tab_handler(
+    arg: &str,
+) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+    Box::pin(async move {
+        let idx = arg
+            .trim()
+            .parse::<usize>()
+            .map_err(|_| anyhow!("Invalid tab index"))?
+            .checked_sub(1)
+            .ok_or_else(|| anyhow!("Tab index must be >= 1"))?;
+        let state_arc = ensure_browser_initialized().await?;
+        let mut guard = state_arc.lock().await;
+        let state = guard.as_mut().unwrap();
+        if idx >= state.pages.len() {
+            return Err(anyhow!("Tab index out of range"));
+        }
+        state.current_idx = idx;
+        Ok(format!("Switched to tab {}", idx + 1))
+    })
+}
+
+fn browser_list_tabs_handler(
+    _arg: &str,
+) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+    Box::pin(async move {
+        let state_arc = ensure_browser_initialized().await?;
+        let guard = state_arc.lock().await;
+        let state = guard.as_ref().unwrap();
+        let mut list = Vec::new();
+        for (i, page) in state.pages.iter().enumerate() {
+            let url_opt = page.url().await?;
+            let url_str = url_opt.unwrap_or_else(|| "<no url>".to_string());
+            let current_marker = if i == state.current_idx {
+                " <-- current"
+            } else {
+                ""
+            };
+            list.push(format!("{}. {}{}", i + 1, url_str, current_marker));
+        }
+        Ok(list.join("\n"))
     })
 }
 
@@ -497,6 +599,34 @@ static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
         Tool {
             description: "browser_evaluate <javascript> : Executes JavaScript code in the browser page and returns the result.",
             handler: Box::new(|s| Box::pin(browser_evaluate_handler(s))),
+        },
+    );
+    m.insert(
+        "browser_new_tab",
+        Tool {
+            description: "browser_new_tab [url] : Opens a new browser tab. If URL is provided, navigates to it; otherwise opens about:blank.",
+            handler: Box::new(|s| Box::pin(browser_new_tab_handler(s))),
+        },
+    );
+    m.insert(
+        "browser_close_tab",
+        Tool {
+            description: "browser_close_tab [index] : Closes the specified tab (1-based). If no index provided, closes the current tab. Cannot close the last tab.",
+            handler: Box::new(|s| Box::pin(browser_close_tab_handler(s))),
+        },
+    );
+    m.insert(
+        "browser_switch_tab",
+        Tool {
+            description: "browser_switch_tab <index> : Switches to the tab with the given 1-based index.",
+            handler: Box::new(|s| Box::pin(browser_switch_tab_handler(s))),
+        },
+    );
+    m.insert(
+        "browser_list_tabs",
+        Tool {
+            description: "browser_list_tabs : Lists all open tabs with their URLs and indicates the current tab.",
+            handler: Box::new(|s| Box::pin(browser_list_tabs_handler(s))),
         },
     );
     m

@@ -8,17 +8,20 @@ use tokio::fs;
 use tokio::process::Command;
 use scraper::{Html, Selector};
 use urlencoding::encode;
+use chromiumoxide::{Browser, BrowserConfig, Page};
 
-// Tool handler: a function that takes a string argument and returns a boxed future.
-// We use a trait object to allow closures.
-type ToolHandler = Box<dyn for<'a> Fn(&'a str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>> + Send + Sync>;
+use once_cell::sync::OnceCell;
+use tokio::sync::Mutex;
+use std::sync::Arc;
+use futures_util::StreamExt;
 
 struct Tool {
     description: &'static str,
     handler: ToolHandler,
 }
 
-// Tool implementations (async functions that take &str and return Result<String>)
+type ToolHandler = Box<dyn for<'a> Fn(&'a str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>> + Send + Sync>;
+
 async fn list_files_handler(arg: &str) -> Result<String> {
     let path = Path::new(arg);
     if !path.is_dir() {
@@ -143,7 +146,6 @@ async fn write_file_handler(arg: &str) -> Result<String> {
     Ok(format!("File written: {file_path}"))
 }
 
-// Registry of all available tools
 async fn fetch_url_handler(arg: &str) -> Result<String> {
     let url = arg.trim();
     if url.is_empty() {
@@ -226,6 +228,128 @@ async fn search_web_handler(arg: &str) -> Result<String> {
     }
 }
 
+// Browser automation state
+struct BrowserState {
+    browser: Browser,
+    handler_task: tokio::task::JoinHandle<()>,
+    current_page: Page,
+}
+
+impl BrowserState {
+    async fn new() -> Result<Self> {
+        let (browser, handler) = Browser::launch(
+            BrowserConfig::builder()
+                .with_head()
+                .build()
+                .map_err(anyhow::Error::msg)?
+        ).await?;
+        let handler_task = tokio::spawn(handler.for_each(|_| async {}));
+        let page = browser.new_page("about:blank").await?;
+        Ok(Self {
+            browser,
+            handler_task,
+            current_page: page,
+        })
+    }
+}
+
+static BROWSER_STATE: OnceCell<Arc<Mutex<Option<BrowserState>>>> = OnceCell::new();
+
+async fn get_browser_state() -> Result<Arc<Mutex<Option<BrowserState>>>> {
+    Ok(BROWSER_STATE
+        .get_or_init(|| Arc::new(Mutex::new(None)))
+        .clone())
+}
+
+async fn ensure_browser_initialized() -> Result<Arc<Mutex<Option<BrowserState>>>> {
+    let state_arc = get_browser_state().await?;
+    let mut guard = state_arc.lock().await;
+    if guard.is_none() {
+        *guard = Some(BrowserState::new().await?);
+    }
+    Ok(state_arc.clone())
+}
+
+// Browser tool handlers
+fn browser_open_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+    Box::pin(async move {
+        let url = arg.trim();
+        if url.is_empty() {
+            return Err(anyhow!("URL cannot be empty"));
+        }
+        let state_arc = ensure_browser_initialized().await?;
+        let mut guard = state_arc.lock().await;
+        let state = guard.as_mut().unwrap();
+        state.current_page.goto(url).await?;
+        Ok(format!("Opened URL: {}", url))
+    })
+}
+
+fn browser_click_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+    Box::pin(async move {
+        let selector = arg.trim();
+        if selector.is_empty() {
+            return Err(anyhow!("CSS selector cannot be empty"));
+        }
+        let state_arc = ensure_browser_initialized().await?;
+        let mut guard = state_arc.lock().await;
+        let state = guard.as_mut().unwrap();
+        let element = state.current_page.find_element(selector).await?;
+        element.click().await?;
+        Ok(format!("Clicked element: {}", selector))
+    })
+}
+
+fn browser_type_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+    Box::pin(async move {
+        // Expect format: "selector text"
+        let mut parts = arg.splitn(2, ' ');
+        let selector = parts.next().ok_or_else(|| anyhow!("Missing selector"))?.trim();
+        let text = parts.next().ok_or_else(|| anyhow!("Missing text"))?.trim();
+        if selector.is_empty() || text.is_empty() {
+            return Err(anyhow!("Selector and text are required"));
+        }
+        let state_arc = ensure_browser_initialized().await?;
+        let mut guard = state_arc.lock().await;
+        let state = guard.as_mut().unwrap();
+        let element = state.current_page.find_element(selector).await?;
+        element.type_str(text).await?;
+        Ok(format!("Typed '{}' into {}", text, selector))
+    })
+}
+
+fn browser_get_html_handler(_arg: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+    Box::pin(async move {
+        let state_arc = ensure_browser_initialized().await?;
+        let mut guard = state_arc.lock().await;
+        let state = guard.as_mut().unwrap();
+        let content = state.current_page.content().await?;
+        Ok(content)
+    })
+}
+
+
+
+fn browser_go_back_handler(_arg: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+    Box::pin(async move {
+        let state_arc = ensure_browser_initialized().await?;
+        let mut guard = state_arc.lock().await;
+        let state = guard.as_mut().unwrap();
+        state.current_page.evaluate("window.history.back()").await?;
+        Ok("Navigated back".to_string())
+    })
+}
+
+fn browser_refresh_handler(_arg: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+    Box::pin(async move {
+        let state_arc = ensure_browser_initialized().await?;
+        let mut guard = state_arc.lock().await;
+        let state = guard.as_mut().unwrap();
+        state.current_page.evaluate("window.location.reload()").await?;
+        Ok("Page refreshed".to_string())
+    })
+}
+
 static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
     let mut m = HashMap::new();
     m.insert(
@@ -282,6 +406,49 @@ static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
         Tool {
             description: "fetch_url <url> : fetches the content from the given URL and returns it as text (HTML, JSON, etc.). Useful for browsing the internet for information.",
             handler: Box::new(|s| Box::pin(fetch_url_handler(s))),
+        },
+    );
+    m.insert(
+        "browser_open",
+        Tool {
+            description: "browser_open <url> : Opens a URL in a visible Chrome/Chromium browser window.",
+            handler: Box::new(|s| Box::pin(browser_open_handler(s))),
+        },
+    );
+    m.insert(
+        "browser_click",
+        Tool {
+            description: "browser_click <selector> : Clicks an element matching the CSS selector.",
+            handler: Box::new(|s| Box::pin(browser_click_handler(s))),
+        },
+    );
+    m.insert(
+        "browser_type",
+        Tool {
+            description: "browser_type <selector> <text> : Types the specified text into an input field identified by the CSS selector.",
+            handler: Box::new(|s| Box::pin(browser_type_handler(s))),
+        },
+    );
+    m.insert(
+        "browser_get_html",
+        Tool {
+            description: "browser_get_html : Returns the HTML content of the current page.",
+            handler: Box::new(|s| Box::pin(browser_get_html_handler(s))),
+        },
+    );
+    
+    m.insert(
+        "browser_go_back",
+        Tool {
+            description: "browser_go_back : Navigates back in the browser history.",
+            handler: Box::new(|s| Box::pin(browser_go_back_handler(s))),
+        },
+    );
+    m.insert(
+        "browser_refresh",
+        Tool {
+            description: "browser_refresh : Reloads the current page.",
+            handler: Box::new(|s| Box::pin(browser_refresh_handler(s))),
         },
     );
     m

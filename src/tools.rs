@@ -319,21 +319,18 @@ fn browser_click_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<String
         let timeout_duration = Duration::from_secs(30);
         let element = loop {
             if start.elapsed() > timeout_duration {
-                return Err(anyhow!("Timeout waiting for element '{}' after 30 seconds", selector));
+                return Err(anyhow!("Timeout waiting for element '{selector}' after 30 seconds"));
             }
-            match state.current_page().find_element(selector).await {
-                Ok(e) => break e,
-                Err(_) => {
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                    continue;
-                }
+            if let Ok(e) = state.current_page().find_element(selector).await {
+                break e;
             }
+            tokio::time::sleep(Duration::from_millis(500)).await;
         };
         
         match timeout(Duration::from_secs(10), element.click()).await {
-            Ok(Ok(_)) => Ok(format!("Clicked element: {}", selector)),
-            Ok(Err(e)) => Err(anyhow!("Error clicking element: {}", e)),
-            Err(_) => Err(anyhow!("Timeout clicking element '{}' after 10 seconds", selector)),
+            Ok(Ok(_)) => Ok(format!("Clicked element: {selector}")),
+            Ok(Err(e)) => Err(anyhow!("Error clicking element: {e}")),
+            Err(_) => Err(anyhow!("Timeout clicking element '{selector}' after 10 seconds")),
         }
     })
 }
@@ -428,7 +425,7 @@ fn browser_new_tab_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<Stri
         let state = guard.as_mut().unwrap();
         match timeout(Duration::from_secs(30), state.browser.new_page(url)).await {
             Ok(result) => {
-                let new_page = result.map_err(|e| anyhow::anyhow!("Failed to open new page: {}", e))?;
+                let new_page = result.map_err(|e| anyhow::anyhow!("Failed to open new page: {e}"))?;
                 state.pages.push(new_page);
                 let new_idx = state.pages.len() - 1;
                 state.current_idx = new_idx;
@@ -540,8 +537,8 @@ fn browser_wait_for_navigation_handler(arg: &str) -> Pin<Box<dyn Future<Output =
         let state = guard.as_mut().unwrap();
         match timeout(Duration::from_secs(timeout_secs), state.current_page().wait_for_navigation()).await {
             Ok(Ok(_)) => Ok("Page finished navigation".to_string()),
-            Ok(Err(e)) => Err(anyhow!("Error during navigation: {}", e)),
-            Err(_) => Err(anyhow!("Timeout waiting for navigation after {} seconds", timeout_secs)),
+            Ok(Err(e)) => Err(anyhow!("Error during navigation: {e}")),
+            Err(_) => Err(anyhow!("Timeout waiting for navigation after {timeout_secs} seconds")),
         }
     })
 }
@@ -718,6 +715,10 @@ Available tools:
     header.to_string() + &tool_lines.join("\n")
 });
 
+/// Executes a tool by name with the given argument.
+///
+/// # Errors
+/// Returns an error if the tool is unknown or if the tool's handler fails.
 pub async fn execute_tool(name: &str, arg: &str) -> Result<String> {
     match TOOLS.get(name) {
         Some(tool) => (tool.handler)(arg).await,

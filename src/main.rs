@@ -6,7 +6,7 @@ use std::io::Write;
 
 use tokio::fs;
 use tokio::sync::broadcast;
-mod tools;
+use deepseek_cli::tools;
 use colored::Colorize;
 use rustyline::{DefaultEditor, error::ReadlineError};
 use std::sync::{Arc, Mutex};

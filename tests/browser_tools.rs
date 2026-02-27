@@ -4,10 +4,8 @@ use tokio::time::{sleep, Duration};
 use futures_util::future::FutureExt;
 use urlencoding::encode;
 
-// This test requires a real browser and is ignored by default.
-// Run with: cargo test -- --ignored
+// This test requires a real browser and may be slow.
 #[tokio::test]
-#[ignore]
 async fn test_browser_tools() -> Result<()> {
     let test_future = async {
         // Create a simple HTML page with a button that changes a div's text

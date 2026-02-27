@@ -4,14 +4,13 @@ use futures_util::{Stream, StreamExt, pin_mut};
 use std::env;
 use std::io::Write;
 
-
 use tokio::fs;
 use tokio::sync::broadcast;
 mod tools;
 use colored::Colorize;
-use tools::{SYSTEM_PROMPT, execute_tool};
 use rustyline::{DefaultEditor, error::ReadlineError};
 use std::sync::{Arc, Mutex};
+use tools::{SYSTEM_PROMPT, execute_tool};
 
 enum UserInput {
     Message(String),
@@ -19,7 +18,10 @@ enum UserInput {
     Interrupted,
 }
 
-async fn handle_stream<S>(stream: S, ctrl_rx: &mut broadcast::Receiver<()>) -> Result<Option<Message>>
+async fn handle_stream<S>(
+    stream: S,
+    ctrl_rx: &mut broadcast::Receiver<()>,
+) -> Result<Option<Message>>
 where
     S: Stream<Item = Result<StreamChunk>>,
 {
@@ -104,8 +106,6 @@ async fn load_token() -> Result<String> {
     ))
 }
 
-
-
 async fn collect_user_input(rl: Arc<Mutex<DefaultEditor>>) -> UserInput {
     let prompt = format!("{}", "> ".cyan().bold());
 
@@ -116,7 +116,8 @@ async fn collect_user_input(rl: Arc<Mutex<DefaultEditor>>) -> UserInput {
         let line_result = tokio::task::spawn_blocking(move || {
             let mut rl_guard = rl_clone.lock().unwrap();
             rl_guard.readline(&prompt_clone)
-        }).await;
+        })
+        .await;
 
         match line_result {
             Ok(Ok(l)) => break l,
@@ -172,7 +173,12 @@ async fn main() -> Result<()> {
     run_chat(api, chat_id, parent_id, rl).await
 }
 
-async fn run_chat(api: DeepSeekAPI, chat_id: String, mut parent_id: Option<i64>, rl: Arc<Mutex<DefaultEditor>>) -> Result<()> {
+async fn run_chat(
+    api: DeepSeekAPI,
+    chat_id: String,
+    mut parent_id: Option<i64>,
+    rl: Arc<Mutex<DefaultEditor>>,
+) -> Result<()> {
     // Setup Ctrl+C handling using broadcast so each round gets a fresh receiver
     let (tx, _) = broadcast::channel(1);
     let tx_task = tx.clone();
@@ -223,7 +229,10 @@ async fn run_chat(api: DeepSeekAPI, chat_id: String, mut parent_id: Option<i64>,
                 loop {
                     // Ensure non-empty response
                     while current_msg.content.trim().is_empty() {
-                        eprintln!("{}", "Model returned empty response, reprompting with warning...".yellow());
+                        eprintln!(
+                            "{}",
+                            "Model returned empty response, reprompting with warning...".yellow()
+                        );
                         let warning = "WARNING: Your previous response was empty. Please provide a meaningful response or use tools as appropriate.\n\nContinue with the next step or provide the final answer.";
                         let stream = api.complete_stream(
                             chat_id.clone(),
@@ -247,7 +256,9 @@ async fn run_chat(api: DeepSeekAPI, chat_id: String, mut parent_id: Option<i64>,
                     }
 
                     // Handle tool calls
-                    match handle_tool_calls(&api, &chat_id, current_msg, &mut parent_id, &mut rx).await? {
+                    match handle_tool_calls(&api, &chat_id, current_msg, &mut parent_id, &mut rx)
+                        .await?
+                    {
                         Some(new_msg) => {
                             current_msg = new_msg;
                             // parent_id already updated inside handle_tool_calls
@@ -264,7 +275,13 @@ async fn run_chat(api: DeepSeekAPI, chat_id: String, mut parent_id: Option<i64>,
     Ok(())
 }
 
-async fn handle_tool_calls(api: &DeepSeekAPI, chat_id: &str, current_msg: Message, parent_id: &mut Option<i64>, ctrl_rx: &mut broadcast::Receiver<()>) -> Result<Option<Message>> {
+async fn handle_tool_calls(
+    api: &DeepSeekAPI,
+    chat_id: &str,
+    current_msg: Message,
+    parent_id: &mut Option<i64>,
+    ctrl_rx: &mut broadcast::Receiver<()>,
+) -> Result<Option<Message>> {
     let lines: Vec<&str> = current_msg.content.lines().collect();
     let mut i = 0;
     let mut invocations = Vec::new();
@@ -312,9 +329,7 @@ async fn handle_tool_calls(api: &DeepSeekAPI, chat_id: &str, current_msg: Messag
                         let path = full_arg.lines().next().unwrap_or("?");
                         format!("Read file at {path}")
                     }
-                    "apply_search_replace" | "create_directory" => {
-                        output.clone()
-                    }
+                    "apply_search_replace" | "create_directory" => output.clone(),
                     "list_files" => {
                         let count = output.lines().count();
                         let dir = full_arg.lines().next().unwrap_or("?");
@@ -323,9 +338,15 @@ async fn handle_tool_calls(api: &DeepSeekAPI, chat_id: &str, current_msg: Messag
                     "run_command" => {
                         let exit_code = if output.starts_with("EXIT_CODE:") {
                             if let Some(line) = output.lines().next() {
-                                line.strip_prefix("EXIT_CODE:").and_then(|s| s.parse::<i32>().ok()).unwrap_or(-1)
-                            } else { -1 }
-                        } else { -1 };
+                                line.strip_prefix("EXIT_CODE:")
+                                    .and_then(|s| s.parse::<i32>().ok())
+                                    .unwrap_or(-1)
+                            } else {
+                                -1
+                            }
+                        } else {
+                            -1
+                        };
                         if exit_code == 0 {
                             "Command succeeded (exit code: 0)".to_string()
                         } else {
@@ -356,13 +377,7 @@ async fn handle_tool_calls(api: &DeepSeekAPI, chat_id: &str, current_msg: Messag
         "{}\n\nREMINDER: Do NOT generate any lines starting with \"TOOL RESULT\" yourself. Only use \"TOOL:\" lines if you need to call another tool. Otherwise, provide your final answer.\n\nContinue with the next step or provide the final answer.",
         results.join("\n\n")
     );
-    let stream = api.complete_stream(
-        chat_id.to_string(),
-        next_prompt,
-        *parent_id,
-        true,
-        true,
-    );
+    let stream = api.complete_stream(chat_id.to_string(), next_prompt, *parent_id, true, true);
     let new_msg = handle_stream(stream, ctrl_rx).await?;
     if let Some(msg) = new_msg {
         *parent_id = msg.message_id;

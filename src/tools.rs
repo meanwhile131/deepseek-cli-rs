@@ -1,26 +1,29 @@
 use anyhow::{Result, anyhow};
+use chromiumoxide::{Browser, BrowserConfig, Page};
+use futures_util::StreamExt;
+use once_cell::sync::OnceCell;
+use scraper::{Html, Selector};
 use std::collections::HashMap;
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::sync::LazyLock;
 use tokio::fs;
 use tokio::process::Command;
-use scraper::{Html, Selector};
-use urlencoding::encode;
-use chromiumoxide::{Browser, BrowserConfig, Page};
-
-use once_cell::sync::OnceCell;
 use tokio::sync::Mutex;
-use std::sync::Arc;
-use futures_util::StreamExt;
+use urlencoding::encode;
 
 struct Tool {
     description: &'static str,
     handler: ToolHandler,
 }
 
-type ToolHandler = Box<dyn for<'a> Fn(&'a str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>> + Send + Sync>;
+type ToolHandler = Box<
+    dyn for<'a> Fn(&'a str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>>
+        + Send
+        + Sync,
+>;
 
 async fn list_files_handler(arg: &str) -> Result<String> {
     let path = Path::new(arg);
@@ -98,15 +101,9 @@ async fn apply_search_replace_handler(arg: &str) -> Result<String> {
 
 async fn run_command_handler(arg: &str) -> Result<String> {
     #[cfg(windows)]
-    let output = Command::new("cmd")
-        .args(&["/c", arg])
-        .output()
-        .await?;
+    let output = Command::new("cmd").args(&["/c", arg]).output().await?;
     #[cfg(not(windows))]
-    let output = Command::new("sh")
-        .args(["-c", arg])
-        .output()
-        .await?;
+    let output = Command::new("sh").args(["-c", arg]).output().await?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let exit_code = output.status.code().unwrap_or(-1);
@@ -167,17 +164,22 @@ async fn search_web_handler(arg: &str) -> Result<String> {
     }
     let encoded = encode(query);
     let url = format!("https://html.duckduckgo.com/html/?q={encoded}");
-    
+
     let client = reqwest::Client::builder()
         .build()
         .map_err(|e| anyhow!("Failed to create HTTP client: {e}"))?;
-    
-    let response = client.get(&url).send().await
+
+    let response = client
+        .get(&url)
+        .send()
+        .await
         .map_err(|e| anyhow!("Network error while searching: {e}"))?;
     let status = response.status();
-    let html = response.text().await
+    let html = response
+        .text()
+        .await
         .map_err(|e| anyhow!("Failed to read response body: {e}"))?;
-    
+
     if !status.is_success() {
         let lower = html.to_lowercase();
         if lower.contains("anomaly-modal") {
@@ -185,38 +187,47 @@ async fn search_web_handler(arg: &str) -> Result<String> {
         }
         anyhow::bail!("HTTP error {status} while searching");
     }
-    
+
     let document = Html::parse_document(&html);
-    let result_selector = Selector::parse("div.result")
-        .map_err(|e| anyhow!("Invalid result selector: {e}"))?;
-    let title_selector = Selector::parse("a.result__a")
-        .map_err(|e| anyhow!("Invalid title selector: {e}"))?;
-    let url_selector = Selector::parse("a.result__a")
-        .map_err(|e| anyhow!("Invalid URL selector: {e}"))?;
+    let result_selector =
+        Selector::parse("div.result").map_err(|e| anyhow!("Invalid result selector: {e}"))?;
+    let title_selector =
+        Selector::parse("a.result__a").map_err(|e| anyhow!("Invalid title selector: {e}"))?;
+    let url_selector =
+        Selector::parse("a.result__a").map_err(|e| anyhow!("Invalid URL selector: {e}"))?;
     let snippet_selector = Selector::parse("a.result__snippet")
         .map_err(|e| anyhow!("Invalid snippet selector: {e}"))?;
-    
-    let base_url = reqwest::Url::parse(&url)
-        .map_err(|e| anyhow!("Invalid base URL: {e}"))?;
+
+    let base_url = reqwest::Url::parse(&url).map_err(|e| anyhow!("Invalid base URL: {e}"))?;
     let mut results = Vec::new();
     for result in document.select(&result_selector) {
         let title_elem = result.select(&title_selector).next();
         let url_elem = result.select(&url_selector).next();
         let snippet_elem = result.select(&snippet_selector).next();
-        
-        let title = title_elem.map(|e| e.text().collect::<String>()).unwrap_or_default();
+
+        let title = title_elem
+            .map(|e| e.text().collect::<String>())
+            .unwrap_or_default();
         let href = url_elem.and_then(|e| e.value().attr("href")).unwrap_or("");
-        let absolute_url = base_url.join(href)
+        let absolute_url = base_url
+            .join(href)
             .ok()
             .map(|u| u.to_string())
             .unwrap_or_default();
-        let snippet = snippet_elem.map(|e| e.text().collect::<String>()).unwrap_or_default();
-        
+        let snippet = snippet_elem
+            .map(|e| e.text().collect::<String>())
+            .unwrap_or_default();
+
         if !title.is_empty() && !absolute_url.is_empty() {
-            results.push(format!("Title: {}\nURL: {}\nSnippet: {}\n---", title.trim(), absolute_url, snippet.trim()));
+            results.push(format!(
+                "Title: {}\nURL: {}\nSnippet: {}\n---",
+                title.trim(),
+                absolute_url,
+                snippet.trim()
+            ));
         }
     }
-    
+
     if results.is_empty() {
         if html.contains("No results") || html.contains("no results found") {
             Ok("No results found for the query.".to_string())
@@ -229,6 +240,7 @@ async fn search_web_handler(arg: &str) -> Result<String> {
 }
 
 // Browser automation state
+#[allow(dead_code)]
 struct BrowserState {
     browser: Browser,
     handler_task: tokio::task::JoinHandle<()>,
@@ -241,8 +253,9 @@ impl BrowserState {
             BrowserConfig::builder()
                 .with_head()
                 .build()
-                .map_err(anyhow::Error::msg)?
-        ).await?;
+                .map_err(anyhow::Error::msg)?,
+        )
+        .await?;
         let handler_task = tokio::spawn(handler.for_each(|_| async {}));
         let page = browser.new_page("about:blank").await?;
         Ok(Self {
@@ -255,14 +268,14 @@ impl BrowserState {
 
 static BROWSER_STATE: OnceCell<Arc<Mutex<Option<BrowserState>>>> = OnceCell::new();
 
-async fn get_browser_state() -> Result<Arc<Mutex<Option<BrowserState>>>> {
-    Ok(BROWSER_STATE
+fn get_browser_state() -> Arc<Mutex<Option<BrowserState>>> {
+    BROWSER_STATE
         .get_or_init(|| Arc::new(Mutex::new(None)))
-        .clone())
+        .clone()
 }
 
 async fn ensure_browser_initialized() -> Result<Arc<Mutex<Option<BrowserState>>>> {
-    let state_arc = get_browser_state().await?;
+    let state_arc = get_browser_state();
     let mut guard = state_arc.lock().await;
     if guard.is_none() {
         *guard = Some(BrowserState::new().await?);
@@ -281,7 +294,7 @@ fn browser_open_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<String>
         let mut guard = state_arc.lock().await;
         let state = guard.as_mut().unwrap();
         state.current_page.goto(url).await?;
-        Ok(format!("Opened URL: {}", url))
+        Ok(format!("Opened URL: {url}"))
     })
 }
 
@@ -296,7 +309,7 @@ fn browser_click_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<String
         let state = guard.as_mut().unwrap();
         let element = state.current_page.find_element(selector).await?;
         element.click().await?;
-        Ok(format!("Clicked element: {}", selector))
+        Ok(format!("Clicked element: {selector}"))
     })
 }
 
@@ -304,7 +317,10 @@ fn browser_type_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<String>
     Box::pin(async move {
         // Expect format: "selector text"
         let mut parts = arg.splitn(2, ' ');
-        let selector = parts.next().ok_or_else(|| anyhow!("Missing selector"))?.trim();
+        let selector = parts
+            .next()
+            .ok_or_else(|| anyhow!("Missing selector"))?
+            .trim();
         let text = parts.next().ok_or_else(|| anyhow!("Missing text"))?.trim();
         if selector.is_empty() || text.is_empty() {
             return Err(anyhow!("Selector and text are required"));
@@ -314,11 +330,13 @@ fn browser_type_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<String>
         let state = guard.as_mut().unwrap();
         let element = state.current_page.find_element(selector).await?;
         element.type_str(text).await?;
-        Ok(format!("Typed '{}' into {}", text, selector))
+        Ok(format!("Typed '{text}' into {selector}"))
     })
 }
 
-fn browser_get_html_handler(_arg: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+fn browser_get_html_handler(
+    _arg: &str,
+) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
     Box::pin(async move {
         let state_arc = ensure_browser_initialized().await?;
         let mut guard = state_arc.lock().await;
@@ -328,9 +346,9 @@ fn browser_get_html_handler(_arg: &str) -> Pin<Box<dyn Future<Output = Result<St
     })
 }
 
-
-
-fn browser_go_back_handler(_arg: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+fn browser_go_back_handler(
+    _arg: &str,
+) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
     Box::pin(async move {
         let state_arc = ensure_browser_initialized().await?;
         let mut guard = state_arc.lock().await;
@@ -340,13 +358,37 @@ fn browser_go_back_handler(_arg: &str) -> Pin<Box<dyn Future<Output = Result<Str
     })
 }
 
-fn browser_refresh_handler(_arg: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+fn browser_refresh_handler(
+    _arg: &str,
+) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
     Box::pin(async move {
         let state_arc = ensure_browser_initialized().await?;
         let mut guard = state_arc.lock().await;
         let state = guard.as_mut().unwrap();
-        state.current_page.evaluate("window.location.reload()").await?;
+        state
+            .current_page
+            .evaluate("window.location.reload()")
+            .await?;
         Ok("Page refreshed".to_string())
+    })
+}
+
+fn browser_evaluate_handler(
+    arg: &str,
+) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+    Box::pin(async move {
+        let js = arg.trim();
+        if js.is_empty() {
+            return Err(anyhow!("JavaScript code cannot be empty"));
+        }
+        let state_arc = ensure_browser_initialized().await?;
+        let mut guard = state_arc.lock().await;
+        let state = guard.as_mut().unwrap();
+        let result = state.current_page.evaluate(js).await?;
+        let result_value = result.value();
+        let result_str = serde_json::to_string(&result_value)
+            .unwrap_or_else(|_| "<serialization error>".to_string());
+        Ok(format!("Evaluation result: {result_str}"))
     })
 }
 
@@ -436,7 +478,6 @@ static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
             handler: Box::new(|s| Box::pin(browser_get_html_handler(s))),
         },
     );
-    
     m.insert(
         "browser_go_back",
         Tool {
@@ -449,6 +490,13 @@ static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
         Tool {
             description: "browser_refresh : Reloads the current page.",
             handler: Box::new(|s| Box::pin(browser_refresh_handler(s))),
+        },
+    );
+    m.insert(
+        "browser_evaluate",
+        Tool {
+            description: "browser_evaluate <javascript> : Executes JavaScript code in the browser page and returns the result.",
+            handler: Box::new(|s| Box::pin(browser_evaluate_handler(s))),
         },
     );
     m

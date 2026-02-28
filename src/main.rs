@@ -370,14 +370,20 @@ async fn handle_tool_calls(
                 // For tools that produce file content, upload the result
                 if tool_name == "read_file" || tool_name == "fetch_url" {
                     // Generate a descriptive status message
-                    let desc = if tool_name == "read_file" {
+                    let (desc, desired_filename) = if tool_name == "read_file" {
                         let path = full_arg.lines().next().unwrap_or("?");
-                        format!("Read file at {}", path)
+                        // Extract filename from path
+                        let filename = std::path::Path::new(path)
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .map(|s| s.to_string());
+                        (format!("Read file at {}", path), filename)
                     } else { // fetch_url
                         let url = full_arg.lines().next().unwrap_or("?");
-                        format!("Fetched URL: {}", url)
+                        // For fetch_url, we could derive a filename, but keep simple for now
+                        (format!("Fetched URL: {}", url), None)
                     };
-                    match upload_content(api, &output, &tool_name).await {
+                    match upload_content(api, &output, desired_filename, &tool_name).await {
                         Ok(file_id) => {
                             file_ids.push(file_id.clone());
                             result_messages.push(format!(
@@ -423,16 +429,21 @@ async fn handle_tool_calls(
     }
 }
 
-async fn upload_content(api: &DeepSeekAPI, content: &str, tool_name: &str) -> Result<String> {
+async fn upload_content(api: &DeepSeekAPI, content: &str, desired_name: Option<String>, tool_name: &str) -> Result<String> {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let pid = std::process::id();
-    let safe_name = tool_name.replace(|c: char| !c.is_alphanumeric(), "_");
-    let file_name = format!("tool_result_{}_{}_{}.txt", pid, timestamp, safe_name);
+    let filename = match desired_name {
+        Some(name) => name,
+        None => {
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let pid = std::process::id();
+            let safe_name = tool_name.replace(|c: char| !c.is_alphanumeric(), "_");
+            format!("tool_result_{}_{}_{}.txt", pid, timestamp, safe_name)
+        }
+    };
     let file_data = content.as_bytes().to_vec();
-    let file_info = api.upload_file(file_data, &file_name, Some("text/plain")).await?;
+    let file_info = api.upload_file(file_data, &filename, None).await?;
     Ok(file_info.id)
 }

@@ -424,8 +424,8 @@ async fn handle_tool_calls(
                 match upload_content(api, &output, Some(filename), &tool_name).await {
                     Ok(file_id) => {
                         file_ids.push(file_id.clone());
-                        // Append file ID to the status message
-                        result_messages.push(format!("{} (content uploaded as file ID: {})", status, file_id));
+                        // Status message for the model (no file ID included)
+                        result_messages.push(status.clone());
                     }
                     Err(e) => {
                         eprintln!("Failed to upload tool result: {}", e);

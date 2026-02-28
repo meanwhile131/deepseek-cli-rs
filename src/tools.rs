@@ -21,12 +21,12 @@ struct Tool {
 }
 
 type ToolHandler = Box<
-    dyn for<'a> Fn(&'a str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>>
+    dyn for<'a> Fn(&'a str) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + 'a>>
         + Send
         + Sync,
 >;
 
-async fn list_files_handler(arg: &str) -> Result<String> {
+async fn list_files_handler(arg: &str) -> Result<(String, String)> {
     let path = Path::new(arg);
     if !path.is_dir() {
         anyhow::bail!("Not a directory: {arg}");
@@ -39,20 +39,24 @@ async fn list_files_handler(arg: &str) -> Result<String> {
         }
     }
     names.sort();
-    Ok(names.join("\n"))
+    let output = names.join("\n");
+    let status = format!("Listed {} files in {}", names.len(), arg);
+    Ok((output, status))
 }
 
-async fn read_file_handler(arg: &str) -> Result<String> {
+async fn read_file_handler(arg: &str) -> Result<(String, String)> {
     let content = fs::read_to_string(arg).await?;
-    Ok(content)
+    let status = format!("Read file at {}", arg);
+    Ok((content, status))
 }
 
-async fn create_directory_handler(arg: &str) -> Result<String> {
+async fn create_directory_handler(arg: &str) -> Result<(String, String)> {
     fs::create_dir_all(arg).await?;
-    Ok(format!("Directory created: {arg}"))
+    let msg = format!("Directory created: {arg}");
+    Ok((msg.clone(), msg))
 }
 
-async fn apply_search_replace_handler(arg: &str) -> Result<String> {
+async fn apply_search_replace_handler(arg: &str) -> Result<(String, String)> {
     let mut lines = arg.lines();
     let file_path = lines
         .next()
@@ -91,14 +95,15 @@ async fn apply_search_replace_handler(arg: &str) -> Result<String> {
         content = content.replace(search, replace);
     }
     fs::write(&file_path, &content).await?;
-    Ok(format!(
+    let msg = format!(
         "Applied {} block(s) to {}",
         blocks.len(),
         file_path
-    ))
+    );
+    Ok((msg.clone(), msg))
 }
 
-async fn run_command_handler(arg: &str) -> Result<String> {
+async fn run_command_handler(arg: &str) -> Result<(String, String)> {
     #[cfg(windows)]
     let output = Command::new("cmd").args(&["/c", arg]).output().await?;
     #[cfg(not(windows))]
@@ -121,10 +126,15 @@ async fn run_command_handler(arg: &str) -> Result<String> {
     if stdout.is_empty() && stderr.is_empty() {
         result.push_str("Command executed successfully (no output)");
     }
-    Ok(result)
+    let status = if exit_code == 0 {
+        "Command succeeded (exit code: 0)".to_string()
+    } else {
+        format!("Command failed (exit code: {exit_code})")
+    };
+    Ok((result, status))
 }
 
-async fn write_file_handler(arg: &str) -> Result<String> {
+async fn write_file_handler(arg: &str) -> Result<(String, String)> {
     let mut lines = arg.lines();
     let file_path = lines
         .next()
@@ -137,24 +147,27 @@ async fn write_file_handler(arg: &str) -> Result<String> {
     }
 
     fs::write(&file_path, &content).await?;
-    Ok(format!("File written: {file_path}"))
+    let msg = format!("File written: {file_path}");
+    Ok((msg.clone(), msg))
 }
 
-async fn fetch_url_handler(arg: &str) -> Result<String> {
+async fn fetch_url_handler(arg: &str) -> Result<(String, String)> {
     let url = arg.trim();
     if url.is_empty() {
         anyhow::bail!("URL cannot be empty");
     }
     let response = reqwest::get(url).await?;
-    let status = response.status();
-    if !status.is_success() {
-        anyhow::bail!("HTTP error {status}: {url}");
+    let status_code = response.status();
+    if !status_code.is_success() {
+        anyhow::bail!("HTTP error {status_code}: {url}");
     }
     let text = response.text().await?;
-    Ok(text)
+    let size = text.len();
+    let status = format!("Fetched URL: {} ({} bytes)", url, size);
+    Ok((text, status))
 }
 
-async fn search_web_handler(arg: &str) -> Result<String> {
+async fn search_web_handler(arg: &str) -> Result<(String, String)> {
     let query = arg.trim();
     if query.is_empty() {
         anyhow::bail!("Search query cannot be empty");
@@ -171,18 +184,18 @@ async fn search_web_handler(arg: &str) -> Result<String> {
         .send()
         .await
         .map_err(|e| anyhow!("Network error while searching: {e}"))?;
-    let status = response.status();
+    let status_code = response.status();
     let html = response
         .text()
         .await
         .map_err(|e| anyhow!("Failed to read response body: {e}"))?;
 
-    if !status.is_success() {
+    if !status_code.is_success() {
         let lower = html.to_lowercase();
         if lower.contains("anomaly-modal") {
             anyhow::bail!("Search engine is blocking the request. Please try again later.");
         }
-        anyhow::bail!("HTTP error {status} while searching");
+        anyhow::bail!("HTTP error {status_code} while searching");
     }
 
     let document = Html::parse_document(&html);
@@ -225,15 +238,21 @@ async fn search_web_handler(arg: &str) -> Result<String> {
         }
     }
 
-    if results.is_empty() {
+    let output = if results.is_empty() {
         if html.contains("No results") || html.contains("no results found") {
-            Ok("No results found for the query.".to_string())
+            "No results found for the query.".to_string()
         } else {
-            Ok("No results could be extracted from the search page. The page structure may have changed.".to_string())
+            "No results could be extracted from the search page. The page structure may have changed.".to_string()
         }
     } else {
-        Ok(results.join("\n"))
-    }
+        results.join("\n")
+    };
+    let status = if results.is_empty() {
+        "Executed tool: search_web - found 0 results".to_string()
+    } else {
+        format!("Executed tool: search_web - found {} results", results.len())
+    };
+    Ok((output, status))
 }
 
 // Browser automation state
@@ -291,7 +310,7 @@ async fn ensure_browser_initialized() -> Result<Arc<Mutex<Option<BrowserState>>>
 }
 
 // Browser tool handlers
-fn browser_open_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+fn browser_open_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
     Box::pin(async move {
         let url = arg.trim();
         if url.is_empty() {
@@ -301,11 +320,12 @@ fn browser_open_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<String>
         let mut guard = state_arc.lock().await;
         let state = guard.as_mut().unwrap();
         state.current_page_mut().goto(url).await?;
-        Ok(format!("Opened URL: {url}"))
+        let msg = format!("Opened URL: {url}");
+        Ok((msg.clone(), msg))
     })
 }
 
-fn browser_click_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+fn browser_click_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
     Box::pin(async move {
         let selector = arg.trim();
         if selector.is_empty() {
@@ -323,11 +343,12 @@ fn browser_click_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<String
         element.click().await
             .map_err(|e| anyhow!("Error clicking element: {}", e))?;
         
-        Ok(format!("Clicked element: {selector}"))
+        let msg = format!("Clicked element: {selector}");
+        Ok((msg.clone(), msg))
     })
 }
 
-fn browser_type_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+fn browser_type_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
     Box::pin(async move {
         let mut parts = arg.splitn(2, ' ');
         let selector = parts
@@ -345,25 +366,27 @@ fn browser_type_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<String>
         let element = state.current_page().find_element(selector).await
             .map_err(|_| anyhow!("Element '{}' not found", selector))?;
         element.type_str(text).await?;
-        Ok(format!("Typed '{text}' into {selector}"))
+        let msg = format!("Typed '{text}' into {selector}");
+        Ok((msg.clone(), msg))
     })
 }
 
 fn browser_get_html_handler(
     _arg: &str,
-) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
     Box::pin(async move {
         let state_arc = ensure_browser_initialized().await?;
         let mut guard = state_arc.lock().await;
         let state = guard.as_mut().unwrap();
         let content = state.current_page().content().await?;
-        Ok(content)
+        let msg = format!("Retrieved HTML from current page ({} bytes)", content.len());
+        Ok((content, msg))
     })
 }
 
 fn browser_go_back_handler(
     _arg: &str,
-) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
     Box::pin(async move {
         let state_arc = ensure_browser_initialized().await?;
         let mut guard = state_arc.lock().await;
@@ -372,13 +395,14 @@ fn browser_go_back_handler(
             .current_page()
             .evaluate("window.history.back()")
             .await?;
-        Ok("Navigated back".to_string())
+        let msg = "Navigated back".to_string();
+        Ok((msg.clone(), msg))
     })
 }
 
 fn browser_refresh_handler(
     _arg: &str,
-) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
     Box::pin(async move {
         let state_arc = ensure_browser_initialized().await?;
         let mut guard = state_arc.lock().await;
@@ -387,13 +411,14 @@ fn browser_refresh_handler(
             .current_page()
             .evaluate("window.location.reload()")
             .await?;
-        Ok("Page refreshed".to_string())
+        let msg = "Page refreshed".to_string();
+        Ok((msg.clone(), msg))
     })
 }
 
 fn browser_evaluate_handler(
     arg: &str,
-) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
     Box::pin(async move {
         let js = arg.trim();
         if js.is_empty() {
@@ -406,11 +431,12 @@ fn browser_evaluate_handler(
         let result_value = result.value();
         let result_str = serde_json::to_string(&result_value)
             .unwrap_or_else(|_| "<serialization error>".to_string());
-        Ok(format!("Evaluation result: {result_str}"))
+        let msg = format!("Evaluation result: {}", result_str);
+        Ok((msg.clone(), msg))
     })
 }
 
-fn browser_new_tab_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+fn browser_new_tab_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
     Box::pin(async move {
         let url = arg.trim();
         let url = if url.is_empty() { "about:blank" } else { url };
@@ -423,7 +449,8 @@ fn browser_new_tab_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<Stri
                 state.pages.push(new_page);
                 let new_idx = state.pages.len() - 1;
                 state.current_idx = new_idx;
-                Ok(format!("Opened new tab {} with URL: {}", new_idx + 1, url))
+                let msg = format!("Opened new tab {} with URL: {}", new_idx + 1, url);
+                Ok((msg.clone(), msg))
             }
             Err(_) => Err(anyhow::anyhow!("Timeout opening new tab after 30 seconds")),
         }
@@ -432,7 +459,7 @@ fn browser_new_tab_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<Stri
 
 fn browser_close_tab_handler(
     arg: &str,
-) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
     Box::pin(async move {
         let state_arc = ensure_browser_initialized().await?;
         let mut guard = state_arc.lock().await;
@@ -462,13 +489,14 @@ fn browser_close_tab_handler(
                 state.current_idx -= 1;
             }
         }
-        Ok(format!("Closed tab {}", idx + 1))
+        let msg = format!("Closed tab {}", idx + 1);
+        Ok((msg.clone(), msg))
     })
 }
 
 fn browser_switch_tab_handler(
     arg: &str,
-) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
     Box::pin(async move {
         let idx = arg
             .trim()
@@ -483,13 +511,14 @@ fn browser_switch_tab_handler(
             return Err(anyhow!("Tab index out of range"));
         }
         state.current_idx = idx;
-        Ok(format!("Switched to tab {}", idx + 1))
+        let msg = format!("Switched to tab {}", idx + 1);
+        Ok((msg.clone(), msg))
     })
 }
 
 fn browser_list_tabs_handler(
     _arg: &str,
-) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
     Box::pin(async move {
         let state_arc = ensure_browser_initialized().await?;
         let guard = state_arc.lock().await;
@@ -505,32 +534,39 @@ fn browser_list_tabs_handler(
             };
             list.push(format!("{}. {}{}", i + 1, url_str, current_marker));
         }
-        Ok(list.join("\n"))
+        let output = list.join("\n");
+        let status = format!("Listed {} open tabs", list.len());
+        Ok((output, status))
     })
 }
 
-fn browser_quit_handler(_arg: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+fn browser_quit_handler(_arg: &str) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
     Box::pin(async move {
         if let Some(state_arc) = BROWSER_STATE.get() {
             let mut guard = state_arc.lock().await;
             if let Some(mut state) = guard.take() {
                 let _ = state.browser.close().await;
                 // handler_task will be dropped, aborting it
-                return Ok("Browser closed".to_string());
+                let msg = "Browser closed".to_string();
+                return Ok((msg.clone(), msg));
             }
         }
-        Ok("No browser was open".to_string())
+        let msg = "No browser was open".to_string();
+        Ok((msg.clone(), msg))
     })
 }
 
-fn browser_wait_for_navigation_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+fn browser_wait_for_navigation_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
     Box::pin(async move {
         let timeout_secs = arg.trim().parse::<u64>().unwrap_or(30);
         let state_arc = ensure_browser_initialized().await?;
         let mut guard = state_arc.lock().await;
         let state = guard.as_mut().unwrap();
         match timeout(Duration::from_secs(timeout_secs), state.current_page().wait_for_navigation()).await {
-            Ok(Ok(_)) => Ok("Page finished navigation".to_string()),
+            Ok(Ok(_)) => {
+                let msg = "Page finished navigation".to_string();
+                Ok((msg.clone(), msg))
+            },
             Ok(Err(e)) => Err(anyhow!("Error during navigation: {e}")),
             Err(_) => Err(anyhow!("Timeout waiting for navigation after {timeout_secs} seconds")),
         }
@@ -715,7 +751,7 @@ Available tools:
 ///
 /// # Errors
 /// Returns an error if the tool is unknown or if the tool's handler fails.
-pub async fn execute_tool(name: &str, arg: &str) -> Result<String> {
+pub async fn execute_tool(name: &str, arg: &str) -> Result<(String, String)> {
     match TOOLS.get(name) {
         Some(tool) => (tool.handler)(arg).await,
         None => anyhow::bail!("Unknown tool: {name}"),

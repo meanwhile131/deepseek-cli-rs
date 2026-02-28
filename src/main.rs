@@ -325,67 +325,7 @@ async fn handle_tool_calls(
     let mut result_messages = Vec::new();
     for (tool_name, full_arg) in invocations {
         match execute_tool(&tool_name, &full_arg).await {
-            Ok(output) => {
-                let status = match tool_name.as_str() {
-                    "read_file" => {
-                        let path = full_arg.lines().next().unwrap_or("?");
-                        format!("Read file at {path}")
-                    }
-                    "fetch_url" => {
-                        let url = full_arg.lines().next().unwrap_or("?");
-                        let size = output.len();
-                        format!("Fetched URL: {} ({} bytes)", url, size)
-                    }
-                    "browser_get_html" => {
-                        let selector = full_arg.lines().next().unwrap_or("?");
-                        format!("Executed browser_get_html for selector: {}", selector)
-                    }
-                    "browser_evaluate" => {
-                        let js = full_arg.lines().next().unwrap_or("?");
-                        format!("Executed browser_evaluate with JS: {}", js)
-                    }
-                    "browser_list_tabs" => {
-                        let count = output.lines().count();
-                        format!("Listed {} open tabs", count)
-                    }
-                    "apply_search_replace" | "create_directory" => output.clone(),
-                    "list_files" => {
-                        let count = output.lines().count();
-                        let dir = full_arg.lines().next().unwrap_or("?");
-                        format!("Listed {count} files in {dir}")
-                    }
-                    "run_command" => {
-                        let exit_code = if output.starts_with("EXIT_CODE:") {
-                            if let Some(line) = output.lines().next() {
-                                line.strip_prefix("EXIT_CODE:")
-                                    .and_then(|s| s.parse::<i32>().ok())
-                                    .unwrap_or(-1)
-                            } else {
-                                -1
-                            }
-                        } else {
-                            -1
-                        };
-                        if exit_code == 0 {
-                            "Command succeeded (exit code: 0)".to_string()
-                        } else {
-                            format!("Command failed (exit code: {exit_code})")
-                        }
-                    }
-                    "search_web" => {
-                        let count = if output.contains("No results found") {
-                            0
-                        } else {
-                            output.matches("Title:").count()
-                        };
-                        format!("Executed tool: {tool_name} - found {count} results")
-                    }
-                    _ => {
-                        // For all other tools, assume the tool's output is a suitable status message
-                        // (e.g., browser_open returns "Opened URL: ...", browser_click returns "Clicked element: ...", etc.)
-                        output.clone()
-                    }
-                };
+            Ok((output, status)) => {
                 println!("{}", status.cyan());
 
                 // Attempt to upload the tool output as a file

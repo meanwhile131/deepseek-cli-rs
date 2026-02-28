@@ -331,6 +331,23 @@ async fn handle_tool_calls(
                         let path = full_arg.lines().next().unwrap_or("?");
                         format!("Read file at {path}")
                     }
+                    "fetch_url" => {
+                        let url = full_arg.lines().next().unwrap_or("?");
+                        let size = output.len();
+                        format!("Fetched URL: {} ({} bytes)", url, size)
+                    }
+                    "browser_get_html" => {
+                        let selector = full_arg.lines().next().unwrap_or("?");
+                        format!("Executed browser_get_html for selector: {}", selector)
+                    }
+                    "browser_evaluate" => {
+                        let js = full_arg.lines().next().unwrap_or("?");
+                        format!("Executed browser_evaluate with JS: {}", js)
+                    }
+                    "browser_list_tabs" => {
+                        let count = output.lines().count();
+                        format!("Listed {} open tabs", count)
+                    }
                     "apply_search_replace" | "create_directory" => output.clone(),
                     "list_files" => {
                         let count = output.lines().count();
@@ -363,7 +380,11 @@ async fn handle_tool_calls(
                         };
                         format!("Executed tool: {tool_name} - found {count} results")
                     }
-                    _ => format!("Executed tool: {tool_name}"),
+                    _ => {
+                        // For all other tools, assume the tool's output is a suitable status message
+                        // (e.g., browser_open returns "Opened URL: ...", browser_click returns "Clicked element: ...", etc.)
+                        output.clone()
+                    }
                 };
                 println!("{}", status.cyan());
 

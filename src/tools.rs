@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity)]
+
 use anyhow::{Result, anyhow};
 use chromiumoxide::{Browser, BrowserConfig, Page};
 use futures_util::StreamExt;
@@ -46,7 +48,7 @@ async fn list_files_handler(arg: &str) -> Result<(String, String)> {
 
 async fn read_file_handler(arg: &str) -> Result<(String, String)> {
     let content = fs::read_to_string(arg).await?;
-    let status = format!("Read file at {}", arg);
+    let status = format!("Read file at {arg}");
     Ok((content, status))
 }
 
@@ -163,7 +165,7 @@ async fn fetch_url_handler(arg: &str) -> Result<(String, String)> {
     }
     let text = response.text().await?;
     let size = text.len();
-    let status = format!("Fetched URL: {} ({} bytes)", url, size);
+    let status = format!("Fetched URL: {url} ({size} bytes)");
     Ok((text, status))
 }
 
@@ -258,6 +260,7 @@ async fn search_web_handler(arg: &str) -> Result<(String, String)> {
 // Browser automation state
 struct BrowserState {
     browser: Browser,
+    #[allow(dead_code)]
     handler_task: tokio::task::JoinHandle<()>,
     pages: Vec<Page>,
     current_idx: usize,
@@ -336,11 +339,11 @@ fn browser_click_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<(Strin
         
         // Find element - fail immediately if not found
         let element = state.current_page().find_element(selector).await
-            .map_err(|_| anyhow!("Element '{}' not found", selector))?;
+            .map_err(|_| anyhow!("Element '{selector}' not found"))?;
         
         // Click element
         element.click().await
-            .map_err(|e| anyhow!("Error clicking element: {}", e))?;
+            .map_err(|e| anyhow!("Error clicking element: {e}"))?;
         
         let msg = format!("Clicked element: {selector}");
         Ok((msg.clone(), msg))
@@ -363,7 +366,7 @@ fn browser_type_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<(String
         let state = guard.as_mut().unwrap();
         
         let element = state.current_page().find_element(selector).await
-            .map_err(|_| anyhow!("Element '{}' not found", selector))?;
+            .map_err(|_| anyhow!("Element '{selector}' not found"))?;
         element.type_str(text).await?;
         let msg = format!("Typed '{text}' into {selector}");
         Ok((msg.clone(), msg))
@@ -430,7 +433,7 @@ fn browser_evaluate_handler(
         let result_value = result.value();
         let result_str = serde_json::to_string(&result_value)
             .unwrap_or_else(|_| "<serialization error>".to_string());
-        let msg = format!("Evaluation result: {}", result_str);
+        let msg = format!("Evaluation result: {result_str}");
         Ok((msg.clone(), msg))
     })
 }

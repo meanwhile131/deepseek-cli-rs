@@ -328,55 +328,22 @@ async fn handle_tool_calls(
             Ok((output, status)) => {
                 println!("{}", status.cyan());
 
-                // Attempt to upload the tool output as a file
-                let desired_filename = match tool_name.as_str() {
-                    "read_file" => {
-                        full_arg.lines().next().map(|p| {
-                            std::path::Path::new(p)
-                                .file_name()
-                                .and_then(|n| n.to_str())
-                                .unwrap_or("file")
-                                .to_string()
-                        })
-                    },
-                    "fetch_url" => {
-                        full_arg.lines().next().map(|url| {
-                            let sanitized = url.replace(|c: char| !c.is_alphanumeric() && c != '.', "_");
-                            format!("{}.html", sanitized)
-                        })
-                    },
-                    _ => {
-                        // For other tools, create a descriptive filename using the first argument
-                        full_arg.lines().next().map(|arg| {
-                            let sanitized = arg.replace(|c: char| !c.is_alphanumeric() && c != '.' && c != '-', "_");
-                            format!("{}_{}.txt", tool_name, sanitized)
-                        })
-                    }
-                };
-                let filename = desired_filename.unwrap_or_else(|| {
-                    let timestamp = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_nanos();
-                    format!("tool_result_{}_{}.txt", tool_name, timestamp)
-                });
-
-                match upload_content(api, &output, Some(filename), &tool_name).await {
-                    Ok(file_id) => {
-                        file_ids.push(file_id.clone());
-                        // Status message for the model (no file ID included)
-                        result_messages.push(status.clone());
+                match handle_single_tool(api, &tool_name, &full_arg, &output, &status).await {
+                    Ok((file_id_opt, msg)) => {
+                        if let Some(file_id) = file_id_opt {
+                            file_ids.push(file_id);
+                        }
+                        result_messages.push(msg);
                     }
                     Err(e) => {
-                        eprintln!("Failed to upload tool result: {}", e);
-                        // Fall back to including the full output inline
-                        result_messages.push(format!("TOOL RESULT for {}:\n{}", tool_name, output));
+                        eprintln!("Error handling tool: {e}");
+                        result_messages.push(format!("TOOL {} failed: {}", tool_name, e));
                     }
                 }
             }
             Err(e) => {
                 eprintln!("{}", format!("Tool {tool_name} failed: {e}").red());
-                result_messages.push(format!("TOOL {} failed: {}", tool_name, e));
+                result_messages.push(format!("TOOL {tool_name} failed: {e}"));
             }
         }
     }
@@ -413,10 +380,62 @@ async fn upload_content(api: &DeepSeekAPI, content: &str, desired_name: Option<S
                 .as_nanos();
             let pid = std::process::id();
             let safe_name = tool_name.replace(|c: char| !c.is_alphanumeric(), "_");
-            format!("tool_result_{}_{}_{}.txt", pid, timestamp, safe_name)
+            format!("tool_result_{pid}_{timestamp}_{safe_name}.txt")
         }
     };
     let file_data = content.as_bytes().to_vec();
     let file_info = api.upload_file(file_data, &filename, None).await?;
     Ok(file_info.id)
+}
+
+async fn handle_single_tool(
+    api: &DeepSeekAPI,
+    tool_name: &str,
+    full_arg: &str,
+    output: &str,
+    status: &str,
+) -> Result<(Option<String>, String)> {
+    // Generate a descriptive filename based on tool
+    let desired_filename = match tool_name {
+        "read_file" => {
+            full_arg.lines().next().map(|p| {
+                std::path::Path::new(p)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("file")
+                    .to_string()
+            })
+        },
+        "fetch_url" => {
+            full_arg.lines().next().map(|url| {
+                let sanitized = url.replace(|c: char| !c.is_alphanumeric() && c != '.', "_");
+                format!("{sanitized}.html")
+            })
+        },
+        _ => {
+            // For other tools, create a descriptive filename using the first argument
+            full_arg.lines().next().map(|arg| {
+                let sanitized = arg.replace(|c: char| !c.is_alphanumeric() && c != '.' && c != '-', "_");
+                format!("{tool_name}_{sanitized}.txt")
+            })
+        }
+    };
+    let filename = match desired_filename {
+        Some(name) => name,
+        None => {
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            format!("tool_result_{tool_name}_{timestamp}.txt")
+        }
+    };
+
+    match upload_content(api, output, Some(filename), tool_name).await {
+        Ok(file_id) => Ok((Some(file_id), status.to_string())),
+        Err(e) => {
+            eprintln!("Failed to upload tool result: {e}");
+            Ok((None, format!("TOOL RESULT for {tool_name}:\n{output}")))
+        }
+    }
 }

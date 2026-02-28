@@ -217,6 +217,7 @@ async fn run_chat(
                     parent_id,
                     true, // search
                     true, // thinking
+                    vec![], // ref_file_ids
                 );
                 let mut rx = tx.subscribe();
                 let final_message = handle_stream(stream, &mut rx).await?;
@@ -240,6 +241,7 @@ async fn run_chat(
                             parent_id,
                             true,
                             true,
+                            vec![], // ref_file_ids
                         );
                         let mut rx_inner = tx.subscribe();
                         let new_msg = handle_stream(stream, &mut rx_inner).await?;
@@ -302,7 +304,6 @@ async fn handle_tool_calls(
             }
             let body = body_lines.join("\n");
 
-            // Fix: avoid leading newline when first_arg is empty
             let full_arg = if body.is_empty() {
                 first_arg
             } else if first_arg.is_empty() {
@@ -320,7 +321,8 @@ async fn handle_tool_calls(
         return Ok(None);
     }
 
-    let mut results = Vec::new();
+    let mut file_ids = Vec::new();
+    let mut result_messages = Vec::new();
     for (tool_name, full_arg) in invocations {
         match execute_tool(&tool_name, &full_arg).await {
             Ok(output) => {
@@ -364,20 +366,54 @@ async fn handle_tool_calls(
                     _ => format!("Executed tool: {tool_name}"),
                 };
                 println!("{}", status.cyan());
-                results.push(format!("TOOL RESULT for {tool_name}:\n{output}"));
+
+                // For tools that produce file content, upload the result
+                if tool_name == "read_file" || tool_name == "fetch_url" {
+                    // Generate a descriptive status message
+                    let desc = if tool_name == "read_file" {
+                        let path = full_arg.lines().next().unwrap_or("?");
+                        format!("Read file at {}", path)
+                    } else { // fetch_url
+                        let url = full_arg.lines().next().unwrap_or("?");
+                        format!("Fetched URL: {}", url)
+                    };
+                    match upload_content(api, &output, &tool_name).await {
+                        Ok(file_id) => {
+                            file_ids.push(file_id.clone());
+                            result_messages.push(format!(
+                                "{} (content uploaded as file ID: {})",
+                                desc, file_id
+                            ));
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to upload tool result: {}", e);
+                            result_messages.push(format!("TOOL RESULT for {}:\n{}", tool_name, output));
+                        }
+                    }
+                } else {
+                    // For other tools, include the result inline
+                    result_messages.push(format!("TOOL RESULT for {}:\n{}", tool_name, output));
+                }
             }
             Err(e) => {
                 eprintln!("{}", format!("Tool {tool_name} failed: {e}").red());
-                results.push(format!("TOOL {tool_name} failed: {e}"));
+                result_messages.push(format!("TOOL {} failed: {}", tool_name, e));
             }
         }
     }
 
     let next_prompt = format!(
         "{}\n\nContinue with the next step or provide the final answer.",
-        results.join("\n\n")
+        result_messages.join("\n\n")
     );
-    let stream = api.complete_stream(chat_id.to_string(), next_prompt, *parent_id, true, true);
+    let stream = api.complete_stream(
+        chat_id.to_string(),
+        next_prompt,
+        *parent_id,
+        true,
+        true,
+        file_ids,
+    );
     let new_msg = handle_stream(stream, ctrl_rx).await?;
     if let Some(msg) = new_msg {
         *parent_id = msg.message_id;
@@ -385,4 +421,18 @@ async fn handle_tool_calls(
     } else {
         Ok(None)
     }
+}
+
+async fn upload_content(api: &DeepSeekAPI, content: &str, tool_name: &str) -> Result<String> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let pid = std::process::id();
+    let safe_name = tool_name.replace(|c: char| !c.is_alphanumeric(), "_");
+    let file_name = format!("tool_result_{}_{}_{}.txt", pid, timestamp, safe_name);
+    let file_data = content.as_bytes().to_vec();
+    let file_info = api.upload_file(file_data, &file_name, Some("text/plain")).await?;
+    Ok(file_info.id)
 }

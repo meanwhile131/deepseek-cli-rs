@@ -367,38 +367,50 @@ async fn handle_tool_calls(
                 };
                 println!("{}", status.cyan());
 
-                // For tools that produce file content, upload the result
-                if tool_name == "read_file" || tool_name == "fetch_url" {
-                    // Generate a descriptive status message
-                    let (desc, desired_filename) = if tool_name == "read_file" {
-                        let path = full_arg.lines().next().unwrap_or("?");
-                        // Extract filename from path
-                        let filename = std::path::Path::new(path)
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .map(|s| s.to_string());
-                        (format!("Read file at {}", path), filename)
-                    } else { // fetch_url
-                        let url = full_arg.lines().next().unwrap_or("?");
-                        // For fetch_url, we could derive a filename, but keep simple for now
-                        (format!("Fetched URL: {}", url), None)
-                    };
-                    match upload_content(api, &output, desired_filename, &tool_name).await {
-                        Ok(file_id) => {
-                            file_ids.push(file_id.clone());
-                            result_messages.push(format!(
-                                "{} (content uploaded as file ID: {})",
-                                desc, file_id
-                            ));
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to upload tool result: {}", e);
-                            result_messages.push(format!("TOOL RESULT for {}:\n{}", tool_name, output));
-                        }
+                // Attempt to upload the tool output as a file
+                let desired_filename = match tool_name.as_str() {
+                    "read_file" => {
+                        full_arg.lines().next().map(|p| {
+                            std::path::Path::new(p)
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("file")
+                                .to_string()
+                        })
+                    },
+                    "fetch_url" => {
+                        full_arg.lines().next().map(|url| {
+                            let sanitized = url.replace(|c: char| !c.is_alphanumeric() && c != '.', "_");
+                            format!("{}.html", sanitized)
+                        })
+                    },
+                    _ => {
+                        // For other tools, create a descriptive filename using the first argument
+                        full_arg.lines().next().map(|arg| {
+                            let sanitized = arg.replace(|c: char| !c.is_alphanumeric() && c != '.' && c != '-', "_");
+                            format!("{}_{}.txt", tool_name, sanitized)
+                        })
                     }
-                } else {
-                    // For other tools, include the result inline
-                    result_messages.push(format!("TOOL RESULT for {}:\n{}", tool_name, output));
+                };
+                let filename = desired_filename.unwrap_or_else(|| {
+                    let timestamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_nanos();
+                    format!("tool_result_{}_{}.txt", tool_name, timestamp)
+                });
+
+                match upload_content(api, &output, Some(filename), &tool_name).await {
+                    Ok(file_id) => {
+                        file_ids.push(file_id.clone());
+                        // Append file ID to the status message
+                        result_messages.push(format!("{} (content uploaded as file ID: {})", status, file_id));
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to upload tool result: {}", e);
+                        // Fall back to including the full output inline
+                        result_messages.push(format!("TOOL RESULT for {}:\n{}", tool_name, output));
+                    }
                 }
             }
             Err(e) => {

@@ -337,7 +337,7 @@ async fn handle_tool_calls(
                     }
                     Err(e) => {
                         eprintln!("Error handling tool: {e}");
-                        result_messages.push(format!("TOOL {} failed: {}", tool_name, e));
+                        result_messages.push(format!("TOOL {tool_name} failed: {e}"));
                     }
                 }
             }
@@ -371,17 +371,14 @@ async fn handle_tool_calls(
 
 async fn upload_content(api: &DeepSeekAPI, content: &str, desired_name: Option<String>, tool_name: &str) -> Result<String> {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let filename = match desired_name {
-        Some(name) => name,
-        None => {
-            let timestamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let pid = std::process::id();
-            let safe_name = tool_name.replace(|c: char| !c.is_alphanumeric(), "_");
-            format!("tool_result_{pid}_{timestamp}_{safe_name}.txt")
-        }
+    let filename = if let Some(name) = desired_name { name } else {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let pid = std::process::id();
+        let safe_name = tool_name.replace(|c: char| !c.is_alphanumeric(), "_");
+        format!("tool_result_{pid}_{timestamp}_{safe_name}.txt")
     };
     let file_data = content.as_bytes().to_vec();
     let file_info = api.upload_file(file_data, &filename, None).await?;
@@ -420,15 +417,12 @@ async fn handle_single_tool(
             })
         }
     };
-    let filename = match desired_filename {
-        Some(name) => name,
-        None => {
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            format!("tool_result_{tool_name}_{timestamp}.txt")
-        }
+    let filename = if let Some(name) = desired_filename { name } else {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        format!("tool_result_{tool_name}_{timestamp}.txt")
     };
 
     match upload_content(api, output, Some(filename), tool_name).await {

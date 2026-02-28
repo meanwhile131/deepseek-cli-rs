@@ -256,7 +256,6 @@ async fn search_web_handler(arg: &str) -> Result<(String, String)> {
 }
 
 // Browser automation state
-#[allow(dead_code)]
 struct BrowserState {
     browser: Browser,
     handler_task: tokio::task::JoinHandle<()>,

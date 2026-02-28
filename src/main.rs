@@ -205,7 +205,7 @@ async fn run_chat(
 
                 // Prepend system prompt only on the very first message
                 let prompt = if parent_id.is_none() {
-                    format!("{}\n\n{}", SYSTEM_PROMPT.as_str(), full_input)
+                    format!("{}\n\nUser:\n{}", SYSTEM_PROMPT.as_str(), full_input)
                 } else {
                     full_input.clone()
                 };

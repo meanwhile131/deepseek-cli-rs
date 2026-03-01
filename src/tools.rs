@@ -14,6 +14,7 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::time::{Duration, timeout};
 use urlencoding::encode;
+use base64;
 
 struct Tool {
     description: &'static str,
@@ -577,6 +578,19 @@ fn browser_wait_for_navigation_handler(arg: &str) -> ToolFuture<'_> {
     })
 }
 
+fn browser_screenshot_handler(_arg: &str) -> ToolFuture<'_> {
+    Box::pin(async move {
+        let state_arc = ensure_browser_initialized().await?;
+        let mut guard = state_arc.lock().await;
+        let state = guard.as_mut().unwrap();
+        let png_data = state.current_page().screenshot().await?;
+        let base64 = base64::encode(&png_data);
+        let data_url = format!("data:image/png;base64,{}", base64);
+        let msg = format!("Captured screenshot ({} bytes)", png_data.len());
+        Ok((data_url, msg))
+    })
+}
+
 static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
     let mut m = HashMap::new();
     m.insert(
@@ -724,6 +738,13 @@ static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
         Tool {
             description: "browser_wait_for_navigation [timeout] : Waits for the current page to finish loading. Optional timeout in seconds (default 30).",
             handler: Box::new(|s| Box::pin(browser_wait_for_navigation_handler(s))),
+        },
+    );
+    m.insert(
+        "browser_screenshot",
+        Tool {
+            description: "browser_screenshot : Captures a screenshot of the current page and returns it as a data URL (PNG). The assistant can display it using an image tag.",
+            handler: Box::new(|s| Box::pin(browser_screenshot_handler(s))),
         },
     );
     m

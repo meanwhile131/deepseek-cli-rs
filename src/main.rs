@@ -1,13 +1,10 @@
 use anyhow::{Result, anyhow};
 use deepseek_api::{DeepSeekAPI, StreamChunk, models::Message};
-use base64;
-use base64::engine::general_purpose;
-use base64::Engine;
-use chrono;
+
 use futures_util::{Stream, StreamExt, pin_mut};
 use std::env;
-use std::path::Path;
 use std::io::Write;
+use std::path::Path;
 
 use colored::Colorize;
 use deepseek_cli::tools;
@@ -15,7 +12,7 @@ use rustyline::{DefaultEditor, error::ReadlineError};
 use std::sync::{Arc, Mutex};
 use tokio::fs;
 use tokio::sync::broadcast;
-use tools::{SYSTEM_PROMPT, execute_tool, ToolOutput};
+use tools::{SYSTEM_PROMPT, ToolOutput, execute_tool};
 
 enum UserInput {
     Message(String),
@@ -298,14 +295,16 @@ async fn upload_tool_output(
             Path::new(path_str)
                 .file_name()
                 .and_then(|n| n.to_str())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| {
-                    let timestamp = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_nanos();
-                    format!("read_file_{}.txt", timestamp)
-                })
+                .map_or_else(
+                    || {
+                        let timestamp = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap()
+                            .as_nanos();
+                        format!("read_file_{timestamp}.txt")
+                    },
+                    ToString::to_string,
+                )
         }
         "fetch_url" => {
             // Create a filename from the URL
@@ -315,20 +314,20 @@ async fn upload_tool_output(
                 .replace("https://", "")
                 .replace("http://", "")
                 .replace(|c: char| !c.is_alphanumeric() && c != '.', "_");
-            format!("{}.html", url_clean)
+            format!("{url_clean}.html")
         }
         "browser_get_html" => {
             // Try to get a descriptive name from the URL or use default
             let url_part = full_arg.lines().next().unwrap_or("page");
             let sanitized = url_part.replace(|c: char| !c.is_alphanumeric() && c != '.', "_");
-            format!("{}.html", sanitized)
+            format!("{sanitized}.html")
         }
         _ => {
             let timestamp = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            format!("tool_result_{}_{}.txt", tool_name, timestamp)
+            format!("tool_result_{tool_name}_{timestamp}.txt")
         }
     };
 
@@ -337,6 +336,7 @@ async fn upload_tool_output(
     Ok(file_info.id)
 }
 
+#[allow(clippy::too_many_lines)]
 async fn handle_tool_calls(
     api: &DeepSeekAPI,
     chat_id: &str,
@@ -388,24 +388,31 @@ async fn handle_tool_calls(
             Ok(tool_output) => {
                 // Print status for all variants
                 let status = match &tool_output {
-                    ToolOutput::Text { status, .. } => status,
-                    ToolOutput::Binary { status, .. } => status,
-                    ToolOutput::FileReference { status, .. } => status,
-                    ToolOutput::StatusOnly { status } => status,
+                    ToolOutput::Text { status, .. }
+                    | ToolOutput::Binary { status, .. }
+                    | ToolOutput::FileReference { status, .. }
+                    | ToolOutput::StatusOnly { status } => status,
                 };
                 println!("{}", status.cyan());
 
                 let (file_id_opt, msg) = match tool_output {
                     ToolOutput::Text { content, status } => {
                         // Tools that should upload their output as files
-                        let upload_tools = ["read_file", "fetch_url", "list_files", "run_command", "search_web", "browser_get_html"];
+                        let upload_tools = [
+                            "read_file",
+                            "fetch_url",
+                            "list_files",
+                            "run_command",
+                            "search_web",
+                            "browser_get_html",
+                        ];
                         if upload_tools.contains(&tool_name.as_str()) {
                             // Upload the content
                             match upload_tool_output(api, &content, &tool_name, &full_arg).await {
                                 Ok(file_id) => (Some(file_id), status),
                                 Err(e) => {
                                     eprintln!("Failed to upload tool output: {e}");
-                                    (None, format!("{}\n\n{}", status, content))
+                                    (None, format!("{status}\n\n{content}"))
                                 }
                             }
                         } else {
@@ -413,7 +420,11 @@ async fn handle_tool_calls(
                             (None, status)
                         }
                     }
-                    ToolOutput::Binary { data, mime_type, status } => {
+                    ToolOutput::Binary {
+                        data,
+                        mime_type,
+                        status,
+                    } => {
                         // For binary data (e.g., screenshot), upload the file
                         let filename = if mime_type == "image/png" {
                             format!("screenshot_{}.png", chrono::Utc::now().timestamp())
@@ -428,12 +439,8 @@ async fn handle_tool_calls(
                             }
                         }
                     }
-                    ToolOutput::FileReference { file_id, status } => {
-                        (Some(file_id), status)
-                    }
-                    ToolOutput::StatusOnly { status } => {
-                        (None, status)
-                    }
+                    ToolOutput::FileReference { file_id, status } => (Some(file_id), status),
+                    ToolOutput::StatusOnly { status } => (None, status),
                 };
                 if let Some(file_id) = file_id_opt {
                     file_ids.push(file_id);
@@ -467,7 +474,3 @@ async fn handle_tool_calls(
         Ok(None)
     }
 }
-
-
-
-

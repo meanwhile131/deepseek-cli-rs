@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
-use chromiumoxide::{Browser, BrowserConfig, Page};
 use chromiumoxide::page::ScreenshotParams;
+use chromiumoxide::{Browser, BrowserConfig, Page};
 use futures_util::StreamExt;
 use once_cell::sync::OnceCell;
 use scraper::{Html, Selector};
@@ -15,17 +15,12 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::time::{Duration, timeout};
 use urlencoding::encode;
-use base64;
-use base64::Engine;
 
 /// Represents the result of executing a tool.
 #[derive(Debug)]
 pub enum ToolOutput {
     /// Text output that may be uploaded as a file or included in a message.
-    Text {
-        content: String,
-        status: String,
-    },
+    Text { content: String, status: String },
     /// Binary data (e.g., screenshot) that should be uploaded as a file.
     Binary {
         data: Vec<u8>,
@@ -33,14 +28,9 @@ pub enum ToolOutput {
         status: String,
     },
     /// A reference to an already uploaded file.
-    FileReference {
-        file_id: String,
-        status: String,
-    },
+    FileReference { file_id: String, status: String },
     /// No content, just a status message.
-    StatusOnly {
-        status: String,
-    },
+    StatusOnly { status: String },
 }
 
 struct Tool {
@@ -153,7 +143,10 @@ async fn run_command_handler(arg: &str) -> Result<ToolOutput> {
     } else {
         format!("Command failed (exit code: {exit_code})")
     };
-    Ok(ToolOutput::Text { content: result, status })
+    Ok(ToolOutput::Text {
+        content: result,
+        status,
+    })
 }
 
 async fn write_file_handler(arg: &str) -> Result<ToolOutput> {
@@ -610,7 +603,10 @@ fn browser_screenshot_handler(_arg: &str) -> ToolFuture<'_> {
         let state_arc = ensure_browser_initialized().await?;
         let mut guard = state_arc.lock().await;
         let state = guard.as_mut().unwrap();
-        let png_data = state.current_page().screenshot(ScreenshotParams::default()).await?;
+        let png_data = state
+            .current_page()
+            .screenshot(ScreenshotParams::default())
+            .await?;
         let status = format!("Captured screenshot ({} bytes)", png_data.len());
         Ok(ToolOutput::Binary {
             data: png_data,

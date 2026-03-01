@@ -14,7 +14,7 @@ use rustyline::{DefaultEditor, error::ReadlineError};
 use std::sync::{Arc, Mutex};
 use tokio::fs;
 use tokio::sync::broadcast;
-use tools::{SYSTEM_PROMPT, execute_tool};
+use tools::{SYSTEM_PROMPT, execute_tool, ToolOutput};
 
 enum UserInput {
     Message(String),
@@ -289,7 +289,7 @@ async fn upload_tool_output(
 ) -> Result<String> {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    // Generate filename
+    // Generate filename based on tool type
     let filename = if tool_name == "browser_get_html" {
         // Try to get a descriptive name from the URL or use default
         let url_part = full_arg.lines().next().unwrap_or("page");
@@ -356,48 +356,54 @@ async fn handle_tool_calls(
     let mut result_messages = Vec::new();
     for (tool_name, full_arg) in invocations {
         match execute_tool(&tool_name, &full_arg).await {
-            Ok((output, status)) => {
+            Ok(tool_output) => {
+                // Print status for all variants
+                let status = match &tool_output {
+                    ToolOutput::Text { status, .. } => status,
+                    ToolOutput::Binary { status, .. } => status,
+                    ToolOutput::FileReference { status, .. } => status,
+                    ToolOutput::StatusOnly { status } => status,
+                };
                 println!("{}", status.cyan());
 
-                // Check for special file reference marker from browser_screenshot
-                let (file_id_opt, msg) = if output.starts_with("PNG_DATA:") {
-                    let base64_data = output["PNG_DATA:".len()..].trim();
-                    match general_purpose::STANDARD.decode(base64_data) {
-                        Ok(png_bytes) => {
-                            let filename = format!("screenshot_{}.png", chrono::Utc::now().timestamp());
-                            match api.upload_file(png_bytes, &filename, Some("image/png")).await {
-                                Ok(file_info) => {
-                                    (Some(file_info.id), status.to_string())
-                                }
+                let (file_id_opt, msg) = match tool_output {
+                    ToolOutput::Text { content, status } => {
+                        // Tools that should upload their output as files
+                        let upload_tools = ["read_file", "fetch_url", "list_files", "run_command", "search_web", "browser_get_html"];
+                        if upload_tools.contains(&tool_name.as_str()) {
+                            // Upload the content
+                            match upload_tool_output(api, &content, &tool_name, &full_arg).await {
+                                Ok(file_id) => (Some(file_id), status),
                                 Err(e) => {
-                                    eprintln!("Failed to upload screenshot: {e}");
-                                    (None, format!("Screenshot captured but upload failed: {e}"))
+                                    eprintln!("Failed to upload tool output: {e}");
+                                    (None, format!("{}\n\n{}", status, content))
                                 }
                             }
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to decode base64 screenshot: {e}");
-                            (None, format!("Screenshot captured but encoding failed: {e}"))
+                        } else {
+                            // Just return the status as the message, no file upload
+                            (None, status)
                         }
                     }
-                } else if output.starts_with("FILE_REF:") {
-                    let file_id = output["FILE_REF:".len()..].trim().to_string();
-                    (Some(file_id), status.to_string())
-                } else {
-                    // Tools that should upload their output as files (output is significant and not just a status)
-                    let upload_tools = ["read_file", "fetch_url", "list_files", "run_command", "search_web", "browser_get_html"];
-                    if upload_tools.contains(&tool_name.as_str()) {
-                        // Upload the output
-                        match upload_tool_output(api, &output, &tool_name, &full_arg).await {
-                            Ok(file_id) => (Some(file_id), status.to_string()),
+                    ToolOutput::Binary { data, mime_type, status } => {
+                        // For binary data (e.g., screenshot), upload the file
+                        let filename = if mime_type == "image/png" {
+                            format!("screenshot_{}.png", chrono::Utc::now().timestamp())
+                        } else {
+                            format!("binary_data_{}", chrono::Utc::now().timestamp())
+                        };
+                        match api.upload_file(data, &filename, Some(&mime_type)).await {
+                            Ok(file_info) => (Some(file_info.id), status),
                             Err(e) => {
-                                eprintln!("Failed to upload tool output: {e}");
-                                (None, format!("{}\n\n{}", status, output))
+                                eprintln!("Failed to upload binary data: {e}");
+                                (None, format!("Binary data captured but upload failed: {e}"))
                             }
                         }
-                    } else {
-                        // Just return the status as the message, no file upload, no output included
-                        (None, status.clone())
+                    }
+                    ToolOutput::FileReference { file_id, status } => {
+                        (Some(file_id), status)
+                    }
+                    ToolOutput::StatusOnly { status } => {
+                        (None, status)
                     }
                 };
                 if let Some(file_id) = file_id_opt {

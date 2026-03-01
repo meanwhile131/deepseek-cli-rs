@@ -18,6 +18,31 @@ use urlencoding::encode;
 use base64;
 use base64::Engine;
 
+/// Represents the result of executing a tool.
+#[derive(Debug)]
+pub enum ToolOutput {
+    /// Text output that may be uploaded as a file or included in a message.
+    Text {
+        content: String,
+        status: String,
+    },
+    /// Binary data (e.g., screenshot) that should be uploaded as a file.
+    Binary {
+        data: Vec<u8>,
+        mime_type: String,
+        status: String,
+    },
+    /// A reference to an already uploaded file.
+    FileReference {
+        file_id: String,
+        status: String,
+    },
+    /// No content, just a status message.
+    StatusOnly {
+        status: String,
+    },
+}
+
 struct Tool {
     description: &'static str,
     handler: ToolHandler,
@@ -25,9 +50,9 @@ struct Tool {
 
 type ToolHandler = Box<dyn for<'a> Fn(&'a str) -> ToolFuture<'a> + Send + Sync>;
 
-type ToolFuture<'a> = Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + 'a>>;
+type ToolFuture<'a> = Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + 'a>>;
 
-async fn list_files_handler(arg: &str) -> Result<(String, String)> {
+async fn list_files_handler(arg: &str) -> Result<ToolOutput> {
     let path = Path::new(arg);
     if !path.is_dir() {
         anyhow::bail!("Not a directory: {arg}");
@@ -40,24 +65,24 @@ async fn list_files_handler(arg: &str) -> Result<(String, String)> {
         }
     }
     names.sort();
-    let output = names.join("\n");
+    let content = names.join("\n");
     let status = format!("Listed {} files in {}", names.len(), arg);
-    Ok((output, status))
+    Ok(ToolOutput::Text { content, status })
 }
 
-async fn read_file_handler(arg: &str) -> Result<(String, String)> {
+async fn read_file_handler(arg: &str) -> Result<ToolOutput> {
     let content = fs::read_to_string(arg).await?;
     let status = format!("Read file at {arg}");
-    Ok((content, status))
+    Ok(ToolOutput::Text { content, status })
 }
 
-async fn create_directory_handler(arg: &str) -> Result<(String, String)> {
+async fn create_directory_handler(arg: &str) -> Result<ToolOutput> {
     fs::create_dir_all(arg).await?;
-    let msg = format!("Directory created: {arg}");
-    Ok((msg.clone(), msg))
+    let status = format!("Directory created: {arg}");
+    Ok(ToolOutput::StatusOnly { status })
 }
 
-async fn apply_search_replace_handler(arg: &str) -> Result<(String, String)> {
+async fn apply_search_replace_handler(arg: &str) -> Result<ToolOutput> {
     let mut lines = arg.lines();
     let file_path = lines
         .next()
@@ -96,11 +121,11 @@ async fn apply_search_replace_handler(arg: &str) -> Result<(String, String)> {
         content = content.replace(search, replace);
     }
     fs::write(&file_path, &content).await?;
-    let msg = format!("Applied {} block(s) to {}", blocks.len(), file_path);
-    Ok((msg.clone(), msg))
+    let status = format!("Applied {} block(s) to {}", blocks.len(), file_path);
+    Ok(ToolOutput::StatusOnly { status })
 }
 
-async fn run_command_handler(arg: &str) -> Result<(String, String)> {
+async fn run_command_handler(arg: &str) -> Result<ToolOutput> {
     #[cfg(windows)]
     let output = Command::new("cmd").args(&["/c", arg]).output().await?;
     #[cfg(not(windows))]
@@ -128,10 +153,10 @@ async fn run_command_handler(arg: &str) -> Result<(String, String)> {
     } else {
         format!("Command failed (exit code: {exit_code})")
     };
-    Ok((result, status))
+    Ok(ToolOutput::Text { content: result, status })
 }
 
-async fn write_file_handler(arg: &str) -> Result<(String, String)> {
+async fn write_file_handler(arg: &str) -> Result<ToolOutput> {
     let mut lines = arg.lines();
     let file_path = lines
         .next()
@@ -144,11 +169,11 @@ async fn write_file_handler(arg: &str) -> Result<(String, String)> {
     }
 
     fs::write(&file_path, &content).await?;
-    let msg = format!("File written: {file_path}");
-    Ok((msg.clone(), msg))
+    let status = format!("File written: {file_path}");
+    Ok(ToolOutput::StatusOnly { status })
 }
 
-async fn fetch_url_handler(arg: &str) -> Result<(String, String)> {
+async fn fetch_url_handler(arg: &str) -> Result<ToolOutput> {
     let url = arg.trim();
     if url.is_empty() {
         anyhow::bail!("URL cannot be empty");
@@ -158,13 +183,13 @@ async fn fetch_url_handler(arg: &str) -> Result<(String, String)> {
     if !status_code.is_success() {
         anyhow::bail!("HTTP error {status_code}: {url}");
     }
-    let text = response.text().await?;
-    let size = text.len();
+    let content = response.text().await?;
+    let size = content.len();
     let status = format!("Fetched URL: {url} ({size} bytes)");
-    Ok((text, status))
+    Ok(ToolOutput::Text { content, status })
 }
 
-async fn search_web_handler(arg: &str) -> Result<(String, String)> {
+async fn search_web_handler(arg: &str) -> Result<ToolOutput> {
     let query = arg.trim();
     if query.is_empty() {
         anyhow::bail!("Search query cannot be empty");
@@ -235,7 +260,7 @@ async fn search_web_handler(arg: &str) -> Result<(String, String)> {
         }
     }
 
-    let output = if results.is_empty() {
+    let content = if results.is_empty() {
         if html.contains("No results") || html.contains("no results found") {
             "No results found for the query.".to_string()
         } else {
@@ -252,7 +277,7 @@ async fn search_web_handler(arg: &str) -> Result<(String, String)> {
             results.len()
         )
     };
-    Ok((output, status))
+    Ok(ToolOutput::Text { content, status })
 }
 
 // Browser automation state
@@ -325,8 +350,8 @@ fn browser_open_handler(arg: &str) -> ToolFuture<'_> {
         let mut guard = state_arc.lock().await;
         let state = guard.as_mut().unwrap();
         state.current_page_mut().goto(url).await?;
-        let msg = format!("Opened URL: {url}");
-        Ok((msg.clone(), msg))
+        let status = format!("Opened URL: {url}");
+        Ok(ToolOutput::StatusOnly { status })
     })
 }
 
@@ -353,8 +378,8 @@ fn browser_click_handler(arg: &str) -> ToolFuture<'_> {
             .await
             .map_err(|e| anyhow!("Error clicking element: {e}"))?;
 
-        let msg = format!("Clicked element: {selector}");
-        Ok((msg.clone(), msg))
+        let status = format!("Clicked element: {selector}");
+        Ok(ToolOutput::StatusOnly { status })
     })
 }
 
@@ -379,8 +404,8 @@ fn browser_type_handler(arg: &str) -> ToolFuture<'_> {
             .await
             .map_err(|_| anyhow!("Element '{selector}' not found"))?;
         element.type_str(text).await?;
-        let msg = format!("Typed '{text}' into {selector}");
-        Ok((msg.clone(), msg))
+        let status = format!("Typed '{text}' into {selector}");
+        Ok(ToolOutput::StatusOnly { status })
     })
 }
 
@@ -390,8 +415,8 @@ fn browser_get_html_handler(_arg: &str) -> ToolFuture<'_> {
         let mut guard = state_arc.lock().await;
         let state = guard.as_mut().unwrap();
         let content = state.current_page().content().await?;
-        let msg = format!("Retrieved HTML from current page ({} bytes)", content.len());
-        Ok((content, msg))
+        let status = format!("Retrieved HTML from current page ({} bytes)", content.len());
+        Ok(ToolOutput::Text { content, status })
     })
 }
 
@@ -404,8 +429,8 @@ fn browser_go_back_handler(_arg: &str) -> ToolFuture<'_> {
             .current_page()
             .evaluate("window.history.back()")
             .await?;
-        let msg = "Navigated back".to_string();
-        Ok((msg.clone(), msg))
+        let status = "Navigated back".to_string();
+        Ok(ToolOutput::StatusOnly { status })
     })
 }
 
@@ -418,8 +443,8 @@ fn browser_refresh_handler(_arg: &str) -> ToolFuture<'_> {
             .current_page()
             .evaluate("window.location.reload()")
             .await?;
-        let msg = "Page refreshed".to_string();
-        Ok((msg.clone(), msg))
+        let status = "Page refreshed".to_string();
+        Ok(ToolOutput::StatusOnly { status })
     })
 }
 
@@ -436,8 +461,8 @@ fn browser_evaluate_handler(arg: &str) -> ToolFuture<'_> {
         let result_value = result.value();
         let result_str = serde_json::to_string(&result_value)
             .unwrap_or_else(|_| "<serialization error>".to_string());
-        let msg = format!("Evaluation result: {result_str}");
-        Ok((msg.clone(), msg))
+        let status = format!("Evaluation result: {result_str}");
+        Ok(ToolOutput::StatusOnly { status })
     })
 }
 
@@ -455,8 +480,8 @@ fn browser_new_tab_handler(arg: &str) -> ToolFuture<'_> {
                 state.pages.push(new_page);
                 let new_idx = state.pages.len() - 1;
                 state.current_idx = new_idx;
-                let msg = format!("Opened new tab {} with URL: {}", new_idx + 1, url);
-                Ok((msg.clone(), msg))
+                let status = format!("Opened new tab {} with URL: {}", new_idx + 1, url);
+                Ok(ToolOutput::StatusOnly { status })
             }
             Err(_) => Err(anyhow::anyhow!("Timeout opening new tab after 30 seconds")),
         }
@@ -493,8 +518,8 @@ fn browser_close_tab_handler(arg: &str) -> ToolFuture<'_> {
                 state.current_idx -= 1;
             }
         }
-        let msg = format!("Closed tab {}", idx + 1);
-        Ok((msg.clone(), msg))
+        let status = format!("Closed tab {}", idx + 1);
+        Ok(ToolOutput::StatusOnly { status })
     })
 }
 
@@ -513,8 +538,8 @@ fn browser_switch_tab_handler(arg: &str) -> ToolFuture<'_> {
             return Err(anyhow!("Tab index out of range"));
         }
         state.current_idx = idx;
-        let msg = format!("Switched to tab {}", idx + 1);
-        Ok((msg.clone(), msg))
+        let status = format!("Switched to tab {}", idx + 1);
+        Ok(ToolOutput::StatusOnly { status })
     })
 }
 
@@ -534,9 +559,9 @@ fn browser_list_tabs_handler(_arg: &str) -> ToolFuture<'_> {
             };
             list.push(format!("{}. {}{}", i + 1, url_str, current_marker));
         }
-        let output = list.join("\n");
+        let content = list.join("\n");
         let status = format!("Listed {} open tabs", list.len());
-        Ok((output, status))
+        Ok(ToolOutput::Text { content, status })
     })
 }
 
@@ -547,12 +572,12 @@ fn browser_quit_handler(_arg: &str) -> ToolFuture<'_> {
             if let Some(mut state) = guard.take() {
                 let _ = state.browser.close().await;
                 // handler_task will be dropped, aborting it
-                let msg = "Browser closed".to_string();
-                return Ok((msg.clone(), msg));
+                let status = "Browser closed".to_string();
+                return Ok(ToolOutput::StatusOnly { status });
             }
         }
-        let msg = "No browser was open".to_string();
-        Ok((msg.clone(), msg))
+        let status = "No browser was open".to_string();
+        Ok(ToolOutput::StatusOnly { status })
     })
 }
 
@@ -569,8 +594,8 @@ fn browser_wait_for_navigation_handler(arg: &str) -> ToolFuture<'_> {
         .await
         {
             Ok(Ok(_)) => {
-                let msg = "Page finished navigation".to_string();
-                Ok((msg.clone(), msg))
+                let status = "Page finished navigation".to_string();
+                Ok(ToolOutput::StatusOnly { status })
             }
             Ok(Err(e)) => Err(anyhow!("Error during navigation: {e}")),
             Err(_) => Err(anyhow!(
@@ -586,10 +611,12 @@ fn browser_screenshot_handler(_arg: &str) -> ToolFuture<'_> {
         let mut guard = state_arc.lock().await;
         let state = guard.as_mut().unwrap();
         let png_data = state.current_page().screenshot(ScreenshotParams::default()).await?;
-        let base64 = base64::engine::general_purpose::STANDARD.encode(&png_data);
-        let msg = format!("Captured screenshot ({} bytes)", png_data.len());
-        // Return a special marker so the caller can upload the file and add the file ID to ref_file_ids
-        Ok((format!("PNG_DATA:{}", base64), msg))
+        let status = format!("Captured screenshot ({} bytes)", png_data.len());
+        Ok(ToolOutput::Binary {
+            data: png_data,
+            mime_type: "image/png".to_string(),
+            status,
+        })
     })
 }
 
@@ -771,7 +798,7 @@ Available tools:
 ///
 /// # Errors
 /// Returns an error if the tool is unknown or if the tool's handler fails.
-pub async fn execute_tool(name: &str, arg: &str) -> Result<(String, String)> {
+pub async fn execute_tool(name: &str, arg: &str) -> Result<ToolOutput> {
     match TOOLS.get(name) {
         Some(tool) => (tool.handler)(arg).await,
         None => anyhow::bail!("Unknown tool: {name}"),

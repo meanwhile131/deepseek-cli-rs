@@ -109,7 +109,7 @@ async fn run_command_handler(arg: &str) -> Result<(String, String)> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let exit_code = output.status.code().unwrap_or(-1);
-    let mut result = format!("EXIT_CODE:{exit_code}\n");
+    let mut result = String::new();
     if !stdout.is_empty() {
         result.push_str("stdout:\n");
         result.push_str(&stdout);
@@ -122,7 +122,7 @@ async fn run_command_handler(arg: &str) -> Result<(String, String)> {
         result.push_str(&stderr);
     }
     if stdout.is_empty() && stderr.is_empty() {
-        result.push_str("Command executed successfully (no output)");
+        result.push_str("Command executed with no output");
     }
     let status = if exit_code == 0 {
         "Command succeeded (exit code: 0)".to_string()

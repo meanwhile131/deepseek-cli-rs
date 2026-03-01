@@ -778,7 +778,7 @@ static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
 
 // Build the system prompt dynamically from the tool registry
 pub static SYSTEM_PROMPT: LazyLock<String> = LazyLock::new(|| {
-    let header = r#"To use a tool, output a line starting with "TOOL:" followed by the tool name and its argument(s). For tools that require multiple pieces of data, the argument(s) may span multiple lines.
+    let header = r#"To use a tool, output a line starting with "TOOL:" followed by the tool name and its argument(s). For tools that require multiple pieces of data, the argument(s) may span multiple lines. You may make multiple tool calls per response.
 After making a tool call, you will receive the tool's result in a subsequent prompt. Do not guess information that could be obtained via a tool call; instead, use the appropriate tool to get accurate data.
 
 Available tools:

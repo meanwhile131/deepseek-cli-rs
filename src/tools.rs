@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow};
 use chromiumoxide::{Browser, BrowserConfig, Page};
+use chromiumoxide::page::ScreenshotParams;
 use futures_util::StreamExt;
 use once_cell::sync::OnceCell;
 use scraper::{Html, Selector};
@@ -15,6 +16,7 @@ use tokio::sync::Mutex;
 use tokio::time::{Duration, timeout};
 use urlencoding::encode;
 use base64;
+use base64::Engine;
 
 struct Tool {
     description: &'static str,
@@ -583,11 +585,11 @@ fn browser_screenshot_handler(_arg: &str) -> ToolFuture<'_> {
         let state_arc = ensure_browser_initialized().await?;
         let mut guard = state_arc.lock().await;
         let state = guard.as_mut().unwrap();
-        let png_data = state.current_page().screenshot().await?;
-        let base64 = base64::encode(&png_data);
-        let data_url = format!("data:image/png;base64,{}", base64);
+        let png_data = state.current_page().screenshot(ScreenshotParams::default()).await?;
+        let base64 = base64::engine::general_purpose::STANDARD.encode(&png_data);
         let msg = format!("Captured screenshot ({} bytes)", png_data.len());
-        Ok((data_url, msg))
+        // Return a special marker so the caller can upload the file and add the file ID to ref_file_ids
+        Ok((format!("PNG_DATA:{}", base64), msg))
     })
 }
 
@@ -743,7 +745,7 @@ static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
     m.insert(
         "browser_screenshot",
         Tool {
-            description: "browser_screenshot : Captures a screenshot of the current page and returns it as a data URL (PNG). The assistant can display it using an image tag.",
+            description: "browser_screenshot : Captures a screenshot of the current page and uploads it as a file. Returns a special marker with the file ID (FILE_REF:<id>) that should be extracted by the caller and added to ref_file_ids. The assistant can then reference the file in its response.",
             handler: Box::new(|s| Box::pin(browser_screenshot_handler(s))),
         },
     );

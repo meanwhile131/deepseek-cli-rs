@@ -1,5 +1,9 @@
 use anyhow::{Result, anyhow};
 use deepseek_api::{DeepSeekAPI, StreamChunk, models::Message};
+use base64;
+use base64::engine::general_purpose;
+use base64::Engine;
+use chrono;
 use futures_util::{Stream, StreamExt, pin_mut};
 use std::env;
 use std::io::Write;
@@ -328,18 +332,50 @@ async fn handle_tool_calls(
             Ok((output, status)) => {
                 println!("{}", status.cyan());
 
-                match handle_single_tool(api, &tool_name, &full_arg, &output, &status).await {
-                    Ok((file_id_opt, msg)) => {
-                        if let Some(file_id) = file_id_opt {
-                            file_ids.push(file_id);
+                // Check for special file reference marker from browser_screenshot
+                let (file_id_opt, msg) = if output.starts_with("PNG_DATA:") {
+                    let base64_data = output["PNG_DATA:".len()..].trim();
+                    match general_purpose::STANDARD.decode(base64_data) {
+                        Ok(png_bytes) => {
+                            let filename = format!("screenshot_{}.png", chrono::Utc::now().timestamp());
+                            match api.upload_file(png_bytes, &filename, Some("image/png")).await {
+                                Ok(file_info) => {
+                                    (Some(file_info.id), status.to_string())
+                                }
+                                Err(e) => {
+                                    eprintln!("Failed to upload screenshot: {e}");
+                                    (None, format!("Screenshot captured but upload failed: {e}"))
+                                }
+                            }
                         }
-                        result_messages.push(msg);
+                        Err(e) => {
+                            eprintln!("Failed to decode base64 screenshot: {e}");
+                            (None, format!("Screenshot captured but encoding failed: {e}"))
+                        }
                     }
-                    Err(e) => {
-                        eprintln!("Error handling tool: {e}");
-                        result_messages.push(format!("TOOL {tool_name} failed: {e}"));
+                } else if output.starts_with("FILE_REF:") {
+                    let file_id = output["FILE_REF:".len()..].trim().to_string();
+                    (Some(file_id), status.to_string())
+                } else {
+                    // Tools that should produce uploaded files
+                    let upload_tools = ["read_file", "fetch_url", "list_files", "browser_get_html", "run_command", "search_web"];
+                    if upload_tools.contains(&tool_name.as_str()) {
+                        match handle_single_tool(api, &tool_name, &full_arg, &output, &status).await {
+                            Ok((file_id_opt, msg)) => (file_id_opt, msg),
+                            Err(e) => {
+                                eprintln!("Error handling tool: {e}");
+                                (None, format!("TOOL {tool_name} failed: {e}"))
+                            }
+                        }
+                    } else {
+                        // Just return the status as the message, no file upload
+                        (None, status.clone())
                     }
+                };
+                if let Some(file_id) = file_id_opt {
+                    file_ids.push(file_id);
                 }
+                result_messages.push(msg);
             }
             Err(e) => {
                 eprintln!("{}", format!("Tool {tool_name} failed: {e}").red());

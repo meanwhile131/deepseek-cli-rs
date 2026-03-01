@@ -1,5 +1,3 @@
-#![allow(clippy::type_complexity)]
-
 use anyhow::{Result, anyhow};
 use chromiumoxide::{Browser, BrowserConfig, Page};
 use futures_util::StreamExt;
@@ -22,11 +20,9 @@ struct Tool {
     handler: ToolHandler,
 }
 
-type ToolHandler = Box<
-    dyn for<'a> Fn(&'a str) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + 'a>>
-        + Send
-        + Sync,
->;
+type ToolHandler = Box<dyn for<'a> Fn(&'a str) -> ToolFuture<'a> + Send + Sync>;
+
+type ToolFuture<'a> = Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + 'a>>;
 
 async fn list_files_handler(arg: &str) -> Result<(String, String)> {
     let path = Path::new(arg);
@@ -316,9 +312,7 @@ async fn ensure_browser_initialized() -> Result<Arc<Mutex<Option<BrowserState>>>
 }
 
 // Browser tool handlers
-fn browser_open_handler(
-    arg: &str,
-) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
+fn browser_open_handler(arg: &str) -> ToolFuture<'_> {
     Box::pin(async move {
         let url = arg.trim();
         if url.is_empty() {
@@ -333,9 +327,7 @@ fn browser_open_handler(
     })
 }
 
-fn browser_click_handler(
-    arg: &str,
-) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
+fn browser_click_handler(arg: &str) -> ToolFuture<'_> {
     Box::pin(async move {
         let selector = arg.trim();
         if selector.is_empty() {
@@ -363,9 +355,7 @@ fn browser_click_handler(
     })
 }
 
-fn browser_type_handler(
-    arg: &str,
-) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
+fn browser_type_handler(arg: &str) -> ToolFuture<'_> {
     Box::pin(async move {
         let mut parts = arg.splitn(2, ' ');
         let selector = parts
@@ -391,9 +381,7 @@ fn browser_type_handler(
     })
 }
 
-fn browser_get_html_handler(
-    _arg: &str,
-) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
+fn browser_get_html_handler(_arg: &str) -> ToolFuture<'_> {
     Box::pin(async move {
         let state_arc = ensure_browser_initialized().await?;
         let mut guard = state_arc.lock().await;
@@ -404,9 +392,7 @@ fn browser_get_html_handler(
     })
 }
 
-fn browser_go_back_handler(
-    _arg: &str,
-) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
+fn browser_go_back_handler(_arg: &str) -> ToolFuture<'_> {
     Box::pin(async move {
         let state_arc = ensure_browser_initialized().await?;
         let mut guard = state_arc.lock().await;
@@ -420,9 +406,7 @@ fn browser_go_back_handler(
     })
 }
 
-fn browser_refresh_handler(
-    _arg: &str,
-) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
+fn browser_refresh_handler(_arg: &str) -> ToolFuture<'_> {
     Box::pin(async move {
         let state_arc = ensure_browser_initialized().await?;
         let mut guard = state_arc.lock().await;
@@ -436,9 +420,7 @@ fn browser_refresh_handler(
     })
 }
 
-fn browser_evaluate_handler(
-    arg: &str,
-) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
+fn browser_evaluate_handler(arg: &str) -> ToolFuture<'_> {
     Box::pin(async move {
         let js = arg.trim();
         if js.is_empty() {
@@ -456,9 +438,7 @@ fn browser_evaluate_handler(
     })
 }
 
-fn browser_new_tab_handler(
-    arg: &str,
-) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
+fn browser_new_tab_handler(arg: &str) -> ToolFuture<'_> {
     Box::pin(async move {
         let url = arg.trim();
         let url = if url.is_empty() { "about:blank" } else { url };
@@ -480,9 +460,7 @@ fn browser_new_tab_handler(
     })
 }
 
-fn browser_close_tab_handler(
-    arg: &str,
-) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
+fn browser_close_tab_handler(arg: &str) -> ToolFuture<'_> {
     Box::pin(async move {
         let state_arc = ensure_browser_initialized().await?;
         let mut guard = state_arc.lock().await;
@@ -517,9 +495,7 @@ fn browser_close_tab_handler(
     })
 }
 
-fn browser_switch_tab_handler(
-    arg: &str,
-) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
+fn browser_switch_tab_handler(arg: &str) -> ToolFuture<'_> {
     Box::pin(async move {
         let idx = arg
             .trim()
@@ -539,9 +515,7 @@ fn browser_switch_tab_handler(
     })
 }
 
-fn browser_list_tabs_handler(
-    _arg: &str,
-) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
+fn browser_list_tabs_handler(_arg: &str) -> ToolFuture<'_> {
     Box::pin(async move {
         let state_arc = ensure_browser_initialized().await?;
         let guard = state_arc.lock().await;
@@ -563,9 +537,7 @@ fn browser_list_tabs_handler(
     })
 }
 
-fn browser_quit_handler(
-    _arg: &str,
-) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
+fn browser_quit_handler(_arg: &str) -> ToolFuture<'_> {
     Box::pin(async move {
         if let Some(state_arc) = BROWSER_STATE.get() {
             let mut guard = state_arc.lock().await;
@@ -581,9 +553,7 @@ fn browser_quit_handler(
     })
 }
 
-fn browser_wait_for_navigation_handler(
-    arg: &str,
-) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
+fn browser_wait_for_navigation_handler(arg: &str) -> ToolFuture<'_> {
     Box::pin(async move {
         let timeout_secs = arg.trim().parse::<u64>().unwrap_or(30);
         let state_arc = ensure_browser_initialized().await?;

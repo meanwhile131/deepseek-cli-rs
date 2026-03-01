@@ -259,7 +259,6 @@ async fn search_web_handler(arg: &str) -> Result<(String, String)> {
 // Browser automation state
 struct BrowserState {
     browser: Browser,
-    #[allow(dead_code)]
     handler_task: tokio::task::JoinHandle<()>,
     pages: Vec<Page>,
     current_idx: usize,
@@ -290,6 +289,12 @@ impl BrowserState {
 
     fn current_page_mut(&mut self) -> &mut Page {
         &mut self.pages[self.current_idx]
+    }
+}
+
+impl Drop for BrowserState {
+    fn drop(&mut self) {
+        self.handler_task.abort();
     }
 }
 

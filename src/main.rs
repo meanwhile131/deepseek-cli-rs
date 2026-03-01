@@ -6,6 +6,7 @@ use base64::Engine;
 use chrono;
 use futures_util::{Stream, StreamExt, pin_mut};
 use std::env;
+use std::path::Path;
 use std::io::Write;
 
 use colored::Colorize;
@@ -290,17 +291,45 @@ async fn upload_tool_output(
     use std::time::{SystemTime, UNIX_EPOCH};
 
     // Generate filename based on tool type
-    let filename = if tool_name == "browser_get_html" {
-        // Try to get a descriptive name from the URL or use default
-        let url_part = full_arg.lines().next().unwrap_or("page");
-        let sanitized = url_part.replace(|c: char| !c.is_alphanumeric() && c != '.', "_");
-        format!("{}.html", sanitized)
-    } else {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        format!("tool_result_{}_{}.txt", tool_name, timestamp)
+    let filename = match tool_name {
+        "read_file" => {
+            // Extract original filename from the path argument
+            let path_str = full_arg.lines().next().unwrap_or("");
+            Path::new(path_str)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| {
+                    let timestamp = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_nanos();
+                    format!("read_file_{}.txt", timestamp)
+                })
+        }
+        "fetch_url" => {
+            // Create a filename from the URL
+            let url_part = full_arg.lines().next().unwrap_or("url");
+            // Remove protocol and replace non-alphanumeric characters
+            let url_clean = url_part
+                .replace("https://", "")
+                .replace("http://", "")
+                .replace(|c: char| !c.is_alphanumeric() && c != '.', "_");
+            format!("{}.html", url_clean)
+        }
+        "browser_get_html" => {
+            // Try to get a descriptive name from the URL or use default
+            let url_part = full_arg.lines().next().unwrap_or("page");
+            let sanitized = url_part.replace(|c: char| !c.is_alphanumeric() && c != '.', "_");
+            format!("{}.html", sanitized)
+        }
+        _ => {
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            format!("tool_result_{}_{}.txt", tool_name, timestamp)
+        }
     };
 
     let file_data = content.as_bytes().to_vec();

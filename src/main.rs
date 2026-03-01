@@ -4,12 +4,12 @@ use futures_util::{Stream, StreamExt, pin_mut};
 use std::env;
 use std::io::Write;
 
-use tokio::fs;
-use tokio::sync::broadcast;
-use deepseek_cli::tools;
 use colored::Colorize;
+use deepseek_cli::tools;
 use rustyline::{DefaultEditor, error::ReadlineError};
 use std::sync::{Arc, Mutex};
+use tokio::fs;
+use tokio::sync::broadcast;
 use tools::{SYSTEM_PROMPT, execute_tool};
 
 enum UserInput {
@@ -215,8 +215,8 @@ async fn run_chat(
                     chat_id.clone(),
                     prompt,
                     parent_id,
-                    true, // search
-                    true, // thinking
+                    true,   // search
+                    true,   // thinking
                     vec![], // ref_file_ids
                 );
                 let mut rx = tx.subscribe();
@@ -369,9 +369,16 @@ async fn handle_tool_calls(
     }
 }
 
-async fn upload_content(api: &DeepSeekAPI, content: &str, desired_name: Option<String>, tool_name: &str) -> Result<String> {
+async fn upload_content(
+    api: &DeepSeekAPI,
+    content: &str,
+    desired_name: Option<String>,
+    tool_name: &str,
+) -> Result<String> {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let filename = if let Some(name) = desired_name { name } else {
+    let filename = if let Some(name) = desired_name {
+        name
+    } else {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -394,30 +401,29 @@ async fn handle_single_tool(
 ) -> Result<(Option<String>, String)> {
     // Generate a descriptive filename based on tool
     let desired_filename = match tool_name {
-        "read_file" => {
-            full_arg.lines().next().map(|p| {
-                std::path::Path::new(p)
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("file")
-                    .to_string()
-            })
-        },
-        "fetch_url" => {
-            full_arg.lines().next().map(|url| {
-                let sanitized = url.replace(|c: char| !c.is_alphanumeric() && c != '.', "_");
-                format!("{sanitized}.html")
-            })
-        },
+        "read_file" => full_arg.lines().next().map(|p| {
+            std::path::Path::new(p)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file")
+                .to_string()
+        }),
+        "fetch_url" => full_arg.lines().next().map(|url| {
+            let sanitized = url.replace(|c: char| !c.is_alphanumeric() && c != '.', "_");
+            format!("{sanitized}.html")
+        }),
         _ => {
             // For other tools, create a descriptive filename using the first argument
             full_arg.lines().next().map(|arg| {
-                let sanitized = arg.replace(|c: char| !c.is_alphanumeric() && c != '.' && c != '-', "_");
+                let sanitized =
+                    arg.replace(|c: char| !c.is_alphanumeric() && c != '.' && c != '-', "_");
                 format!("{tool_name}_{sanitized}.txt")
             })
         }
     };
-    let filename = if let Some(name) = desired_filename { name } else {
+    let filename = if let Some(name) = desired_filename {
+        name
+    } else {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()

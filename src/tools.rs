@@ -14,7 +14,7 @@ use std::sync::LazyLock;
 use tokio::fs;
 use tokio::process::Command;
 use tokio::sync::Mutex;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 use urlencoding::encode;
 
 struct Tool {
@@ -97,11 +97,7 @@ async fn apply_search_replace_handler(arg: &str) -> Result<(String, String)> {
         content = content.replace(search, replace);
     }
     fs::write(&file_path, &content).await?;
-    let msg = format!(
-        "Applied {} block(s) to {}",
-        blocks.len(),
-        file_path
-    );
+    let msg = format!("Applied {} block(s) to {}", blocks.len(), file_path);
     Ok((msg.clone(), msg))
 }
 
@@ -252,7 +248,10 @@ async fn search_web_handler(arg: &str) -> Result<(String, String)> {
     let status = if results.is_empty() {
         "Executed tool: search_web - found 0 results".to_string()
     } else {
-        format!("Executed tool: search_web - found {} results", results.len())
+        format!(
+            "Executed tool: search_web - found {} results",
+            results.len()
+        )
     };
     Ok((output, status))
 }
@@ -312,7 +311,9 @@ async fn ensure_browser_initialized() -> Result<Arc<Mutex<Option<BrowserState>>>
 }
 
 // Browser tool handlers
-fn browser_open_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
+fn browser_open_handler(
+    arg: &str,
+) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
     Box::pin(async move {
         let url = arg.trim();
         if url.is_empty() {
@@ -327,7 +328,9 @@ fn browser_open_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<(String
     })
 }
 
-fn browser_click_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
+fn browser_click_handler(
+    arg: &str,
+) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
     Box::pin(async move {
         let selector = arg.trim();
         if selector.is_empty() {
@@ -336,21 +339,28 @@ fn browser_click_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<(Strin
         let state_arc = ensure_browser_initialized().await?;
         let mut guard = state_arc.lock().await;
         let state = guard.as_mut().unwrap();
-        
+
         // Find element - fail immediately if not found
-        let element = state.current_page().find_element(selector).await
+        let element = state
+            .current_page()
+            .find_element(selector)
+            .await
             .map_err(|_| anyhow!("Element '{selector}' not found"))?;
-        
+
         // Click element
-        element.click().await
+        element
+            .click()
+            .await
             .map_err(|e| anyhow!("Error clicking element: {e}"))?;
-        
+
         let msg = format!("Clicked element: {selector}");
         Ok((msg.clone(), msg))
     })
 }
 
-fn browser_type_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
+fn browser_type_handler(
+    arg: &str,
+) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
     Box::pin(async move {
         let mut parts = arg.splitn(2, ' ');
         let selector = parts
@@ -364,8 +374,11 @@ fn browser_type_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<(String
         let state_arc = ensure_browser_initialized().await?;
         let mut guard = state_arc.lock().await;
         let state = guard.as_mut().unwrap();
-        
-        let element = state.current_page().find_element(selector).await
+
+        let element = state
+            .current_page()
+            .find_element(selector)
+            .await
             .map_err(|_| anyhow!("Element '{selector}' not found"))?;
         element.type_str(text).await?;
         let msg = format!("Typed '{text}' into {selector}");
@@ -438,7 +451,9 @@ fn browser_evaluate_handler(
     })
 }
 
-fn browser_new_tab_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
+fn browser_new_tab_handler(
+    arg: &str,
+) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
     Box::pin(async move {
         let url = arg.trim();
         let url = if url.is_empty() { "about:blank" } else { url };
@@ -447,7 +462,8 @@ fn browser_new_tab_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<(Str
         let state = guard.as_mut().unwrap();
         match timeout(Duration::from_secs(30), state.browser.new_page(url)).await {
             Ok(result) => {
-                let new_page = result.map_err(|e| anyhow::anyhow!("Failed to open new page: {e}"))?;
+                let new_page =
+                    result.map_err(|e| anyhow::anyhow!("Failed to open new page: {e}"))?;
                 state.pages.push(new_page);
                 let new_idx = state.pages.len() - 1;
                 state.current_idx = new_idx;
@@ -542,7 +558,9 @@ fn browser_list_tabs_handler(
     })
 }
 
-fn browser_quit_handler(_arg: &str) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
+fn browser_quit_handler(
+    _arg: &str,
+) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
     Box::pin(async move {
         if let Some(state_arc) = BROWSER_STATE.get() {
             let mut guard = state_arc.lock().await;
@@ -558,19 +576,28 @@ fn browser_quit_handler(_arg: &str) -> Pin<Box<dyn Future<Output = Result<(Strin
     })
 }
 
-fn browser_wait_for_navigation_handler(arg: &str) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
+fn browser_wait_for_navigation_handler(
+    arg: &str,
+) -> Pin<Box<dyn Future<Output = Result<(String, String)>> + Send + '_>> {
     Box::pin(async move {
         let timeout_secs = arg.trim().parse::<u64>().unwrap_or(30);
         let state_arc = ensure_browser_initialized().await?;
         let mut guard = state_arc.lock().await;
         let state = guard.as_mut().unwrap();
-        match timeout(Duration::from_secs(timeout_secs), state.current_page().wait_for_navigation()).await {
+        match timeout(
+            Duration::from_secs(timeout_secs),
+            state.current_page().wait_for_navigation(),
+        )
+        .await
+        {
             Ok(Ok(_)) => {
                 let msg = "Page finished navigation".to_string();
                 Ok((msg.clone(), msg))
-            },
+            }
             Ok(Err(e)) => Err(anyhow!("Error during navigation: {e}")),
-            Err(_) => Err(anyhow!("Timeout waiting for navigation after {timeout_secs} seconds")),
+            Err(_) => Err(anyhow!(
+                "Timeout waiting for navigation after {timeout_secs} seconds"
+            )),
         }
     })
 }
@@ -752,5 +779,3 @@ pub async fn execute_tool(name: &str, arg: &str) -> Result<(String, String)> {
         None => anyhow::bail!("Unknown tool: {name}"),
     }
 }
-
-

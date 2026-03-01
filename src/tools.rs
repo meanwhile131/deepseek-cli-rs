@@ -287,10 +287,8 @@ impl BrowserState {
         if std::env::var("DISPLAY").is_ok() {
             builder = builder.with_head();
         }
-        let (browser, handler) = Browser::launch(
-            builder.build().map_err(anyhow::Error::msg)?,
-        )
-        .await?;
+        let (browser, handler) =
+            Browser::launch(builder.build().map_err(anyhow::Error::msg)?).await?;
         let handler_task = tokio::spawn(handler.for_each(|_| async {}));
         let page = browser.new_page("about:blank").await?;
         Ok(Self {

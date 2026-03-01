@@ -769,7 +769,7 @@ static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
     m.insert(
         "browser_screenshot",
         Tool {
-            description: "browser_screenshot : Captures a screenshot of the current page and uploads it as a file. Returns a special marker with the file ID (FILE_REF:<id>) that should be extracted by the caller and added to ref_file_ids. The assistant can then reference the file in its response.",
+            description: "browser_screenshot : Provides you with a screenshot of the current page.",
             handler: Box::new(|s| Box::pin(browser_screenshot_handler(s))),
         },
     );

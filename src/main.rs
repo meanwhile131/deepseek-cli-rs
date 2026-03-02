@@ -336,18 +336,10 @@ async fn upload_tool_output(
     Ok(file_info.id)
 }
 
-#[allow(clippy::too_many_lines)]
-async fn handle_tool_calls(
-    api: &DeepSeekAPI,
-    chat_id: &str,
-    current_msg: Message,
-    parent_id: &mut Option<i64>,
-    ctrl_rx: &mut broadcast::Receiver<()>,
-) -> Result<Option<Message>> {
-    let lines: Vec<&str> = current_msg.content.lines().collect();
+fn parse_tool_invocations(content: &str) -> Vec<(String, String)> {
+    let lines: Vec<&str> = content.lines().collect();
     let mut i = 0;
     let mut invocations = Vec::new();
-
     while i < lines.len() {
         let line = lines[i].trim();
         if let Some(stripped) = line.strip_prefix("TOOL:") {
@@ -376,6 +368,95 @@ async fn handle_tool_calls(
             i += 1;
         }
     }
+    invocations
+}
+
+async fn process_single_tool(
+    api: &DeepSeekAPI,
+    tool_name: &str,
+    full_arg: &str,
+) -> (Option<String>, String) {
+    // Validate single-line path tools
+    let single_line_path_tools = ["read_file", "create_directory", "list_files"];
+    if single_line_path_tools.contains(&tool_name) && full_arg.contains('\n') {
+        let err_msg = format!("TOOL {tool_name} failed: path argument must be on a single line (no newlines)");
+        eprintln!("{}", err_msg.red());
+        return (None, err_msg);
+    }
+    match execute_tool(tool_name, full_arg).await {
+        Ok(tool_output) => {
+            // Print status for all variants
+            let status = match &tool_output {
+                ToolOutput::Text { status, .. }
+                | ToolOutput::Binary { status, .. }
+                | ToolOutput::FileReference { status, .. }
+                | ToolOutput::StatusOnly { status } => status,
+            };
+            println!("{}", status.cyan());
+
+            match tool_output {
+                ToolOutput::Text { content, status } => {
+                    // Tools that should upload their output as files
+                    let upload_tools = [
+                        "read_file",
+                        "fetch_url",
+                        "list_files",
+                        "run_command",
+                        "search_web",
+                        "browser_get_html",
+                    ];
+                    if upload_tools.contains(&tool_name) {
+                        // Upload the content
+                        match upload_tool_output(api, &content, tool_name, full_arg).await {
+                            Ok(file_id) => (Some(file_id), status),
+                            Err(e) => {
+                                eprintln!("Failed to upload tool output: {e}");
+                                (None, format!("{status}\n\n{content}"))
+                            }
+                        }
+                    } else {
+                        // Just return the status as the message, no file upload
+                        (None, status)
+                    }
+                }
+                ToolOutput::Binary {
+                    data,
+                    mime_type,
+                    status,
+                } => {
+                    // For binary data (e.g., screenshot), upload the file
+                    let filename = if mime_type == "image/png" {
+                        format!("screenshot_{}.png", chrono::Utc::now().timestamp())
+                    } else {
+                        format!("binary_data_{}", chrono::Utc::now().timestamp())
+                    };
+                    match api.upload_file(data, &filename, Some(&mime_type)).await {
+                        Ok(file_info) => (Some(file_info.id), status),
+                        Err(e) => {
+                            eprintln!("Failed to upload binary data: {e}");
+                            (None, format!("Binary data captured but upload failed: {e}"))
+                        }
+                    }
+                }
+                ToolOutput::FileReference { file_id, status } => (Some(file_id), status),
+                ToolOutput::StatusOnly { status } => (None, status),
+            }
+        }
+        Err(e) => {
+            eprintln!("{}", format!("Tool {tool_name} failed: {e}").red());
+            (None, format!("TOOL {tool_name} failed: {e}"))
+        }
+    }
+}
+
+async fn handle_tool_calls(
+    api: &DeepSeekAPI,
+    chat_id: &str,
+    current_msg: Message,
+    parent_id: &mut Option<i64>,
+    ctrl_rx: &mut broadcast::Receiver<()>,
+) -> Result<Option<Message>> {
+    let invocations = parse_tool_invocations(&current_msg.content);
 
     if invocations.is_empty() {
         return Ok(None);
@@ -383,75 +464,13 @@ async fn handle_tool_calls(
 
     let mut file_ids = Vec::new();
     let mut result_messages = Vec::new();
-    for (tool_name, full_arg) in invocations {
-        match execute_tool(&tool_name, &full_arg).await {
-            Ok(tool_output) => {
-                // Print status for all variants
-                let status = match &tool_output {
-                    ToolOutput::Text { status, .. }
-                    | ToolOutput::Binary { status, .. }
-                    | ToolOutput::FileReference { status, .. }
-                    | ToolOutput::StatusOnly { status } => status,
-                };
-                println!("{}", status.cyan());
 
-                let (file_id_opt, msg) = match tool_output {
-                    ToolOutput::Text { content, status } => {
-                        // Tools that should upload their output as files
-                        let upload_tools = [
-                            "read_file",
-                            "fetch_url",
-                            "list_files",
-                            "run_command",
-                            "search_web",
-                            "browser_get_html",
-                        ];
-                        if upload_tools.contains(&tool_name.as_str()) {
-                            // Upload the content
-                            match upload_tool_output(api, &content, &tool_name, &full_arg).await {
-                                Ok(file_id) => (Some(file_id), status),
-                                Err(e) => {
-                                    eprintln!("Failed to upload tool output: {e}");
-                                    (None, format!("{status}\n\n{content}"))
-                                }
-                            }
-                        } else {
-                            // Just return the status as the message, no file upload
-                            (None, status)
-                        }
-                    }
-                    ToolOutput::Binary {
-                        data,
-                        mime_type,
-                        status,
-                    } => {
-                        // For binary data (e.g., screenshot), upload the file
-                        let filename = if mime_type == "image/png" {
-                            format!("screenshot_{}.png", chrono::Utc::now().timestamp())
-                        } else {
-                            format!("binary_data_{}", chrono::Utc::now().timestamp())
-                        };
-                        match api.upload_file(data, &filename, Some(&mime_type)).await {
-                            Ok(file_info) => (Some(file_info.id), status),
-                            Err(e) => {
-                                eprintln!("Failed to upload binary data: {e}");
-                                (None, format!("Binary data captured but upload failed: {e}"))
-                            }
-                        }
-                    }
-                    ToolOutput::FileReference { file_id, status } => (Some(file_id), status),
-                    ToolOutput::StatusOnly { status } => (None, status),
-                };
-                if let Some(file_id) = file_id_opt {
-                    file_ids.push(file_id);
-                }
-                result_messages.push(msg);
-            }
-            Err(e) => {
-                eprintln!("{}", format!("Tool {tool_name} failed: {e}").red());
-                result_messages.push(format!("TOOL {tool_name} failed: {e}"));
-            }
+    for (tool_name, full_arg) in invocations {
+        let (file_id_opt, msg) = process_single_tool(api, &tool_name, &full_arg).await;
+        if let Some(file_id) = file_id_opt {
+            file_ids.push(file_id);
         }
+        result_messages.push(msg);
     }
 
     let next_prompt = format!(

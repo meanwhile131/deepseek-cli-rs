@@ -5,13 +5,12 @@ use futures_util::{Stream, StreamExt, pin_mut};
 use std::env;
 use std::io::Write;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use colored::Colorize;
 use deepseek_cli::tools;
 use rustyline::{DefaultEditor, error::ReadlineError};
 use std::sync::{Arc, Mutex};
-use tokio::fs as async_fs;
+use tokio::fs;
 use tokio::sync::broadcast;
 use tools::{SYSTEM_PROMPT, ToolOutput, execute_tool};
 
@@ -92,7 +91,7 @@ async fn load_token() -> Result<String> {
 
     for path_opt in paths.iter().flatten() {
         if path_opt.exists() {
-            let content = async_fs::read_to_string(path_opt).await?;
+            let content = fs::read_to_string(path_opt).await?;
             let token = content.trim().to_string();
             if !token.is_empty() {
                 println!("Loaded token from {}", path_opt.display());
@@ -157,30 +156,23 @@ async fn main() -> Result<()> {
     let api = DeepSeekAPI::new(token).await?;
 
     let args: Vec<String> = env::args().collect();
-    let (chat_id, parent_id, first_message_file_ids) = if args.len() > 1 {
+    let (chat_id, parent_id) = if args.len() > 1 {
         let id = args[1].clone();
         println!("Resuming chat with ID: {}", &id);
         let chat = api.get_chat_info(&id).await?;
-        (id, chat.current_message_id, vec![])
+        (id, chat.current_message_id)
     } else {
         let chat = api.create_chat().await?;
         let id = chat.id;
         println!("Chat created with ID: {id}");
-        let first_message_file_ids = match generate_and_upload_file_list(&api).await {
-            Ok(file_id) => vec![file_id],
-            Err(e) => {
-                eprintln!("Failed to generate file list: {e}. Continuing without attachment.");
-                vec![]
-            }
-        };
-        (id, None, first_message_file_ids)
+        (id, None)
     };
     println!("System prompt loaded. Type your messages (type '/exit' to quit):");
 
     // Setup rustyline editor for line editing with arrow keys (in-memory history only)
     let rl = Arc::new(Mutex::new(DefaultEditor::new()?));
 
-    run_chat(api, chat_id, parent_id, rl, first_message_file_ids).await
+    run_chat(api, chat_id, parent_id, rl).await
 }
 
 async fn run_chat(
@@ -188,7 +180,6 @@ async fn run_chat(
     chat_id: String,
     mut parent_id: Option<i64>,
     rl: Arc<Mutex<DefaultEditor>>,
-    first_message_file_ids: Vec<String>,
 ) -> Result<()> {
     // Setup Ctrl+C handling using broadcast so each round gets a fresh receiver
     let (tx, _) = broadcast::channel(1);
@@ -222,13 +213,14 @@ async fn run_chat(
                 };
 
                 // Stream the assistant's response
-                let file_ids = if parent_id.is_none() {
-                    first_message_file_ids.clone()
-                } else {
-                    vec![]
-                };
-                let stream =
-                    api.complete_stream(chat_id.clone(), prompt, parent_id, true, true, file_ids);
+                let stream = api.complete_stream(
+                    chat_id.clone(),
+                    prompt,
+                    parent_id,
+                    true,   // search
+                    true,   // thinking
+                    vec![], // ref_file_ids
+                );
                 let mut rx = tx.subscribe();
                 let final_message = handle_stream(stream, &mut rx).await?;
                 let Some(mut current_msg) = final_message else {
@@ -340,26 +332,6 @@ async fn upload_tool_output(
     };
 
     let file_data = content.as_bytes().to_vec();
-    let file_info = api.upload_file(file_data, &filename, None).await?;
-    Ok(file_info.id)
-}
-
-async fn generate_and_upload_file_list(api: &DeepSeekAPI) -> Result<String> {
-    let entries = std::fs::read_dir(".")?;
-    let mut listing = String::new();
-    for entry in entries {
-        let entry = entry?;
-        let file_name = entry.file_name();
-        let file_name = file_name.to_string_lossy();
-        listing.push_str(&file_name);
-        listing.push('\n');
-    }
-    let _timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let filename = "files_in_current_directory.txt".to_string();
-    let file_data = listing.into_bytes();
     let file_info = api.upload_file(file_data, &filename, None).await?;
     Ok(file_info.id)
 }

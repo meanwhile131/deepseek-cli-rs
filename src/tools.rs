@@ -43,6 +43,9 @@ type ToolHandler = Box<dyn for<'a> Fn(&'a str) -> ToolFuture<'a> + Send + Sync>;
 type ToolFuture<'a> = Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send + 'a>>;
 
 async fn list_files_handler(arg: &str) -> Result<ToolOutput> {
+    if arg.contains('\n') {
+        anyhow::bail!("list_files: path argument must be on a single line (no newlines)");
+    }
     let path = Path::new(arg);
     if !path.is_dir() {
         anyhow::bail!("Not a directory: {arg}");
@@ -61,12 +64,18 @@ async fn list_files_handler(arg: &str) -> Result<ToolOutput> {
 }
 
 async fn read_file_handler(arg: &str) -> Result<ToolOutput> {
+    if arg.contains('\n') {
+        anyhow::bail!("read_file: path argument must be on a single line (no newlines)");
+    }
     let content = fs::read_to_string(arg).await?;
     let status = format!("Read file at {arg}");
     Ok(ToolOutput::Text { content, status })
 }
 
 async fn create_directory_handler(arg: &str) -> Result<ToolOutput> {
+    if arg.contains('\n') {
+        anyhow::bail!("create_directory: path argument must be on a single line (no newlines)");
+    }
     fs::create_dir_all(arg).await?;
     let status = format!("Directory created: {arg}");
     Ok(ToolOutput::StatusOnly { status })
@@ -780,7 +789,6 @@ static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
 pub static SYSTEM_PROMPT: LazyLock<String> = LazyLock::new(|| {
     let header = r#"To use a tool, output a line starting with "TOOL:" followed by the tool name and its argument(s). For tools that require multiple pieces of data, the argument(s) may span multiple lines. You may make multiple tool calls per response.
 After making a tool call, you will receive the tool's result in a subsequent prompt. Do not guess information that could be obtained via a tool call; instead, use the appropriate tool to get accurate data.
-**Do NOT** try to output tool call results, the results are provided by the system. Never output [file content begin], [file content end], and similar special tokens.
 
 Available tools:
 "#;

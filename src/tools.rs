@@ -293,9 +293,6 @@ struct BrowserState {
 impl BrowserState {
     async fn new() -> Result<Self> {
         let mut builder = BrowserConfig::builder();
-        if std::env::var("DISPLAY").is_ok() {
-            builder = builder.with_head();
-        }
         let (browser, handler) = Browser::launch(
             builder.build().map_err(anyhow::Error::msg)?,
         )

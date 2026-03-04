@@ -292,7 +292,7 @@ struct BrowserState {
 
 impl BrowserState {
     async fn new() -> Result<Self> {
-        let mut builder = BrowserConfig::builder();
+        let builder = BrowserConfig::builder();
         let (browser, handler) = Browser::launch(
             builder.build().map_err(anyhow::Error::msg)?,
         )

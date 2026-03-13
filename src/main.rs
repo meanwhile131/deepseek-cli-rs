@@ -167,12 +167,19 @@ async fn main() -> Result<()> {
         println!("Chat created with ID: {id}");
         (id, None)
     };
+
+    // Get project context automatically
+    let project_context = match tools::execute_tool("get_project_context", "").await {
+        Ok(tools::ToolOutput::Text { content, .. }) => content,
+        _ => "Unable to determine project context.".to_string(),
+    };
+
     println!("System prompt loaded. Type your messages (type '/exit' to quit):");
 
     // Setup rustyline editor for line editing with arrow keys (in-memory history only)
     let rl = Arc::new(Mutex::new(DefaultEditor::new()?));
 
-    run_chat(api, chat_id, parent_id, rl).await
+    run_chat(api, chat_id, parent_id, rl, project_context).await
 }
 
 async fn run_chat(
@@ -180,6 +187,7 @@ async fn run_chat(
     chat_id: String,
     mut parent_id: Option<i64>,
     rl: Arc<Mutex<DefaultEditor>>,
+    project_context: String,
 ) -> Result<()> {
     // Setup Ctrl+C handling using broadcast so each round gets a fresh receiver
     let (tx, _) = broadcast::channel(1);
@@ -205,9 +213,14 @@ async fn run_chat(
                     eprintln!("Failed to add history entry: {e}");
                 }
 
-                // Prepend system prompt only on the very first message
+                // Prepend system prompt and project context only on the very first message
                 let prompt = if parent_id.is_none() {
-                    format!("{}\n\nUser:\n{}", SYSTEM_PROMPT.as_str(), full_input)
+                    format!(
+                        "{}\n\n## Current Project Context\n{}\n\nUser:\n{}",
+                        SYSTEM_PROMPT.as_str(),
+                        project_context,
+                        full_input
+                    )
                 } else {
                     full_input.clone()
                 };

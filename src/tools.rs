@@ -6,7 +6,7 @@ use once_cell::sync::OnceCell;
 use scraper::{Html, Selector};
 use std::collections::HashMap;
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -15,6 +15,54 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::time::{Duration, timeout};
 use urlencoding::encode;
+
+/// Check if a path should be ignored based on .gitignore
+fn is_gitignored(path: &Path, git_root: &Path) -> Result<bool> {
+    let gitignore = git_root.join(".gitignore");
+    if !gitignore.exists() {
+        return Ok(false);
+    }
+
+    let gitignore_content = std::fs::read_to_string(&gitignore)?;
+    let relative_path = path.strip_prefix(git_root).map_or_else(
+        |_| path.to_string_lossy().to_string(),
+        |p| p.to_string_lossy().to_string(),
+    );
+
+    for line in gitignore_content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let pattern = line.trim_start_matches('/');
+        // Simple glob matching: handle ** and *
+        if pattern.contains("**") {
+            let parts: Vec<&str> = pattern.split("**").collect();
+            if parts.len() == 2 {
+                let prefix = parts[0].trim_end_matches('/');
+                let suffix = parts[1].trim_start_matches('/');
+                if (prefix.is_empty() || relative_path.starts_with(prefix))
+                    && (suffix.is_empty() || relative_path.ends_with(suffix))
+                {
+                    return Ok(true);
+                }
+            }
+        } else if pattern.contains('*') {
+            // Simple wildcard matching
+            let regex_pattern = pattern.replace('.', "\\.").replace('*', ".*");
+            if let Ok(re) = regex::Regex::new(&format!("^{regex_pattern}$"))
+                && re.is_match(&relative_path)
+            {
+                return Ok(true);
+            }
+        } else if relative_path == pattern || relative_path.ends_with(&format!("/{pattern}")) {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
 
 /// Represents the result of executing a tool.
 #[derive(Debug)]
@@ -50,10 +98,22 @@ async fn list_files_handler(arg: &str) -> Result<ToolOutput> {
     if !path.is_dir() {
         anyhow::bail!("Not a directory: {arg}");
     }
+
+    // Find git root for .gitignore checking
+    let git_root = find_git_root(path).unwrap_or_else(|| path.to_path_buf());
+
     let mut entries = fs::read_dir(path).await?;
     let mut names = Vec::new();
     while let Some(entry) = entries.next_entry().await? {
         if let Some(name) = entry.file_name().to_str() {
+            // Skip hidden files/directories (starting with .)
+            if name.starts_with('.') {
+                continue;
+            }
+            // Skip gitignored files
+            if is_gitignored(&entry.path(), &git_root).unwrap_or(false) {
+                continue;
+            }
             names.push(name.to_string());
         }
     }
@@ -282,7 +342,434 @@ async fn search_web_handler(arg: &str) -> Result<ToolOutput> {
     Ok(ToolOutput::Text { content, status })
 }
 
+// ============================================================================
+// Git Integration Tools
+// ============================================================================
+
+/// Find the git root directory from a starting path
+fn find_git_root(start_path: &Path) -> Option<PathBuf> {
+    let mut current = start_path.to_path_buf();
+    loop {
+        let git_dir = current.join(".git");
+        if git_dir.exists() {
+            return Some(current);
+        }
+        if !current.pop() {
+            return None;
+        }
+    }
+}
+
+async fn git_status_handler(arg: &str) -> Result<ToolOutput> {
+    let working_dir = if arg.trim().is_empty() {
+        std::env::current_dir()?
+    } else {
+        Path::new(arg.trim()).to_path_buf()
+    };
+
+    let git_root = find_git_root(&working_dir)
+        .ok_or_else(|| anyhow!("Not a git repository: {}", working_dir.display()))?;
+
+    let output = Command::new("git")
+        .args(["status", "--short", "--branch"])
+        .current_dir(&git_root)
+        .output()
+        .await?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if !output.status.success() {
+        anyhow::bail!("git status failed: {stderr}");
+    }
+
+    let content = if stdout.is_empty() {
+        "Working tree clean".to_string()
+    } else {
+        stdout.to_string()
+    };
+
+    let status = format!("Git status for {}", git_root.display());
+    Ok(ToolOutput::Text { content, status })
+}
+
+async fn git_diff_handler(arg: &str) -> Result<ToolOutput> {
+    let args: Vec<&str> = arg.split_whitespace().collect();
+    let working_dir = std::env::current_dir()?;
+    let git_root = find_git_root(&working_dir)
+        .ok_or_else(|| anyhow!("Not a git repository"))?;
+
+    let mut cmd = Command::new("git");
+    cmd.arg("diff").current_dir(&git_root);
+
+    // Parse optional args: --staged, --cached, or a commit range
+    for a in args {
+        if a.starts_with('-') || a.contains("..") {
+            cmd.arg(a);
+        }
+    }
+
+    let output = cmd.output().await?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if !output.status.success() {
+        anyhow::bail!("git diff failed: {stderr}");
+    }
+
+    let content = if stdout.is_empty() {
+        "No changes".to_string()
+    } else {
+        stdout.to_string()
+    };
+
+    let status = "Git diff generated".to_string();
+    Ok(ToolOutput::Text { content, status })
+}
+
+async fn git_log_handler(arg: &str) -> Result<ToolOutput> {
+    let limit = arg.trim().parse::<usize>().unwrap_or(10);
+    let working_dir = std::env::current_dir()?;
+    let git_root = find_git_root(&working_dir)
+        .ok_or_else(|| anyhow!("Not a git repository"))?;
+
+    let output = Command::new("git")
+        .args([
+            "log",
+            &format!("-{limit}"),
+            "--pretty=format:%h - %s (%an, %ar)",
+        ])
+        .current_dir(&git_root)
+        .output()
+        .await?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if !output.status.success() {
+        anyhow::bail!("git log failed: {stderr}");
+    }
+
+    let status = format!("Showed last {limit} commits");
+    Ok(ToolOutput::Text {
+        content: stdout.to_string(),
+        status,
+    })
+}
+
+async fn git_commit_handler(arg: &str) -> Result<ToolOutput> {
+    let message = arg.trim();
+    if message.is_empty() {
+        anyhow::bail!("Commit message cannot be empty");
+    }
+
+    let working_dir = std::env::current_dir()?;
+    let git_root = find_git_root(&working_dir)
+        .ok_or_else(|| anyhow!("Not a git repository"))?;
+
+    let output = Command::new("git")
+        .args(["commit", "-m", message])
+        .current_dir(&git_root)
+        .output()
+        .await?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if !output.status.success() {
+        anyhow::bail!("git commit failed: {stderr}");
+    }
+
+    let status = format!("Committed: {message}");
+    Ok(ToolOutput::StatusOnly {
+        status: format!("{status}\n{}", stdout.trim()),
+    })
+}
+
+async fn git_add_handler(arg: &str) -> Result<ToolOutput> {
+    let pathspec = arg.trim();
+    if pathspec.is_empty() {
+        anyhow::bail!("Pathspec cannot be empty. Use '.' for all changes.");
+    }
+
+    let working_dir = std::env::current_dir()?;
+    let git_root = find_git_root(&working_dir)
+        .ok_or_else(|| anyhow!("Not a git repository"))?;
+
+    let output = Command::new("git")
+        .args(["add", pathspec])
+        .current_dir(&git_root)
+        .output()
+        .await?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if !output.status.success() {
+        anyhow::bail!("git add failed: {stderr}");
+    }
+
+    let status = format!("Staged: {pathspec}");
+    Ok(ToolOutput::StatusOnly { status })
+}
+
+// ============================================================================
+// Codebase Search Tool (ripgrep)
+// ============================================================================
+
+async fn search_codebase_handler(arg: &str) -> Result<ToolOutput> {
+    let parts: Vec<&str> = arg.trim().splitn(2, ' ').collect();
+    let pattern = parts.first().ok_or_else(|| anyhow!("Search pattern required"))?;
+    let mut path = ".";
+    let mut file_type = None;
+    let mut max_results = 50;
+
+    // Parse optional arguments
+    if parts.len() > 1 {
+        let opts = parts[1];
+        for opt in opts.split_whitespace() {
+            if let Some(p) = opt.strip_prefix("--path=") {
+                path = p;
+            } else if let Some(ft) = opt.strip_prefix("--type=") {
+                file_type = Some(ft);
+            } else if let Some(n) = opt.strip_prefix("--max=") {
+                max_results = n.parse().unwrap_or(50);
+            }
+        }
+    }
+
+    let mut cmd = Command::new("rg");
+    cmd.args([
+        "--color",
+        "never",
+        "--no-heading",
+        "--line-number",
+        "--context",
+        "1",
+        "-m",
+        &max_results.to_string(),
+        pattern,
+        path,
+    ]);
+
+    if let Some(ft) = file_type {
+        cmd.arg("--type");
+        cmd.arg(ft);
+    }
+
+    let output = cmd.output().await?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // rg returns 1 if no matches found, which is not an error
+    if output.status.code() != Some(0) && output.status.code() != Some(1) {
+        anyhow::bail!("search_codebase failed: {stderr}");
+    }
+
+    let content = if stdout.is_empty() {
+        format!("No matches found for pattern: {pattern}")
+    } else {
+        stdout.to_string()
+    };
+
+    let status = format!("Searched for '{pattern}' in {path}");
+    Ok(ToolOutput::Text { content, status })
+}
+
+// ============================================================================
+// Test Runner Tool
+// ============================================================================
+
+/// Detect the project type and return the appropriate test command
+fn detect_test_command(project_root: &Path) -> Option<(&'static str, Vec<&'static str>)> {
+    // Rust (Cargo.toml)
+    if project_root.join("Cargo.toml").exists() {
+        return Some(("cargo", vec!["test"]));
+    }
+    // Node.js (package.json)
+    if project_root.join("package.json").exists() {
+        return Some(("npm", vec!["test"]));
+    }
+    // Python (pytest or unittest)
+    if project_root.join("pytest.ini").exists()
+        || project_root.join("pyproject.toml").exists()
+        || project_root.join("setup.py").exists()
+    {
+        return Some(("pytest", vec![]));
+    }
+    // Python with unittest
+    if project_root.join("tests").is_dir() {
+        return Some(("python", vec!["-m", "unittest", "discover"]));
+    }
+    // Go (go.mod)
+    if project_root.join("go.mod").exists() {
+        return Some(("go", vec!["test", "./..."]));
+    }
+    None
+}
+
+async fn run_tests_handler(arg: &str) -> Result<ToolOutput> {
+    let working_dir = std::env::current_dir()?;
+    let git_root = find_git_root(&working_dir)
+        .unwrap_or_else(|| working_dir.clone());
+
+    // Check for custom command in args
+    let custom_cmd = arg.trim();
+    let (cmd_name, cmd_args) = if custom_cmd.is_empty() {
+        // Auto-detect
+        detect_test_command(&git_root)
+            .ok_or_else(|| anyhow!("Could not detect project type. Specify test command manually."))?
+    } else {
+        // Parse custom command
+        let parts: Vec<&str> = custom_cmd.split_whitespace().collect();
+        (parts.first().copied().unwrap_or("cargo"), parts[1..].to_vec())
+    };
+
+    let output = Command::new(cmd_name)
+        .args(&cmd_args)
+        .current_dir(&git_root)
+        .output()
+        .await?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let exit_code = output.status.code().unwrap_or(-1);
+
+    let mut result = String::new();
+    if !stdout.is_empty() {
+        result.push_str("stdout:\n");
+        result.push_str(&stdout);
+    }
+    if !stderr.is_empty() {
+        if !stdout.is_empty() {
+            result.push_str("\n\n");
+        }
+        result.push_str("stderr:\n");
+        result.push_str(&stderr);
+    }
+
+    let status = if exit_code == 0 {
+        format!("Tests passed ({} cmd: {})", cmd_name, cmd_args.join(" "))
+    } else {
+        format!("Tests failed (exit code: {exit_code})")
+    };
+
+    Ok(ToolOutput::Text {
+        content: result,
+        status,
+    })
+}
+
+// ============================================================================
+// Project Context Tool
+// ============================================================================
+
+async fn get_project_context_handler(_arg: &str) -> Result<ToolOutput> {
+    use std::fmt::Write;
+
+    let working_dir = std::env::current_dir()?;
+    let git_root = find_git_root(&working_dir)
+        .unwrap_or_else(|| working_dir.clone());
+
+    let mut context = String::new();
+
+    // Project type detection
+    let project_type = if git_root.join("Cargo.toml").exists() {
+        "Rust (Cargo)"
+    } else if git_root.join("package.json").exists() {
+        "Node.js (npm)"
+    } else if git_root.join("pyproject.toml").exists() || git_root.join("setup.py").exists() {
+        "Python"
+    } else if git_root.join("go.mod").exists() {
+        "Go"
+    } else if git_root.join("pom.xml").exists() {
+        "Java (Maven)"
+    } else if git_root.join("build.gradle").exists() || git_root.join("build.gradle.kts").exists()
+    {
+        "Java (Gradle)"
+    } else {
+        "Unknown"
+    };
+    writeln!(context, "Project Type: {project_type}").unwrap();
+
+    writeln!(context, "Project Root: {}", git_root.display()).unwrap();
+
+    // Git info
+    let git_output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(&git_root)
+        .output()
+        .await;
+    if let Ok(output) = git_output {
+        let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !branch.is_empty() {
+            writeln!(context, "Git Branch: {branch}").unwrap();
+        }
+    }
+
+    // Directory structure (top level)
+    context.push_str("\nTop-level structure:\n");
+    if let Ok(mut entries) = fs::read_dir(&git_root).await {
+        let mut dirs = Vec::new();
+        let mut files = Vec::new();
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue; // Skip hidden files/dirs
+            }
+            // Skip gitignored files
+            if is_gitignored(&entry.path(), &git_root).unwrap_or(false) {
+                continue;
+            }
+            let is_dir = entry.path().is_dir();
+            if is_dir {
+                dirs.push(name);
+            } else {
+                files.push(name);
+            }
+        }
+        dirs.sort();
+        files.sort();
+        for dir in dirs {
+            writeln!(context, "  📁 {dir}").unwrap();
+        }
+        for file in files {
+            writeln!(context, "  📄 {file}").unwrap();
+        }
+    }
+
+    // Key config files
+    let key_files = [
+        "README.md",
+        "Cargo.toml",
+        "package.json",
+        "pyproject.toml",
+        "go.mod",
+        "Makefile",
+        "docker-compose.yml",
+        ".github/workflows",
+    ];
+    let mut found_files = Vec::new();
+    for kf in &key_files {
+        let full_path = git_root.join(kf);
+        if full_path.exists() {
+            found_files.push(kf.to_string());
+        }
+    }
+    if !found_files.is_empty() {
+        context.push_str("\nKey files:\n");
+        for f in found_files {
+            writeln!(context, "  - {f}").unwrap();
+        }
+    }
+
+    let status = format!("Project context for {}", git_root.display());
+    Ok(ToolOutput::Text { content: context, status })
+}
+
+// ============================================================================
 // Browser automation state
+// ============================================================================
+
 struct BrowserState {
     browser: Browser,
     handler_task: tokio::task::JoinHandle<()>,
@@ -779,16 +1266,89 @@ static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
             handler: Box::new(|s| Box::pin(browser_screenshot_handler(s))),
         },
     );
+    // Git tools
+    m.insert(
+        "git_status",
+        Tool {
+            description: "git_status [directory] : Shows git status for the repository. If no directory specified, uses current directory.",
+            handler: Box::new(|s| Box::pin(git_status_handler(s))),
+        },
+    );
+    m.insert(
+        "git_diff",
+        Tool {
+            description: "git_diff [options] : Shows git diff. Supports --staged, --cached, or commit ranges like HEAD~1.",
+            handler: Box::new(|s| Box::pin(git_diff_handler(s))),
+        },
+    );
+    m.insert(
+        "git_log",
+        Tool {
+            description: "git_log [count] : Shows recent commits. Default is 10 commits.",
+            handler: Box::new(|s| Box::pin(git_log_handler(s))),
+        },
+    );
+    m.insert(
+        "git_commit",
+        Tool {
+            description: "git_commit <message> : Creates a git commit with the given message.",
+            handler: Box::new(|s| Box::pin(git_commit_handler(s))),
+        },
+    );
+    m.insert(
+        "git_add",
+        Tool {
+            description: "git_add <pathspec> : Stages changes. Use '.' for all changes.",
+            handler: Box::new(|s| Box::pin(git_add_handler(s))),
+        },
+    );
+    // Codebase search
+    m.insert(
+        "search_codebase",
+        Tool {
+            description: "search_codebase <pattern> [--path=dir] [--type=lang] [--max=N] : Searches code using ripgrep. Default max 50 results.",
+            handler: Box::new(|s| Box::pin(search_codebase_handler(s))),
+        },
+    );
+    // Test runner
+    m.insert(
+        "run_tests",
+        Tool {
+            description: "run_tests [custom_cmd] : Runs project tests. Auto-detects Rust/Node/Python/Go. Optional custom command.",
+            handler: Box::new(|s| Box::pin(run_tests_handler(s))),
+        },
+    );
+    // Project context
+    m.insert(
+        "get_project_context",
+        Tool {
+            description: "get_project_context : Returns project type, git branch, directory structure, and key files.",
+            handler: Box::new(|s| Box::pin(get_project_context_handler(s))),
+        },
+    );
     m
 });
 
 // Build the system prompt dynamically from the tool registry
 pub static SYSTEM_PROMPT: LazyLock<String> = LazyLock::new(|| {
-    let header = r#"You are an assistant that uses tools to get accurate information.
-To use a tool, output a line starting with "TOOL:" followed by the tool name and its argument(s). For tools that require multiple pieces of data, the argument(s) may span multiple lines. You may make multiple tool calls per response.
-After making a tool call, you will receive the tool's result in a subsequent prompt. Do not guess information that could be obtained via a tool call; instead, use the appropriate tool to get accurate data.
-Do not include any other text before or after the tool call(s). Do not try to provide the tool's result yourself.
-If a tool call fails, read the error message and correct the call if needed.
+    let header = r#"You are an AI assistant that uses tools to get accurate information and complete tasks.
+Always use tools to gather information rather than making assumptions.
+
+## Tool Usage
+To use a tool, output a line starting with "TOOL:" followed by the tool name and its argument(s).
+- For tools that require multiple pieces of data, the argument(s) may span multiple lines
+- You may make multiple tool calls per response
+- After making a tool call, you will receive the tool's result in a subsequent prompt
+- Do not guess information that could be obtained via a tool call; use the appropriate tool instead
+- Do not include any other text before or after the tool call(s)
+- If a tool call fails, read the error message and correct the call if needed
+
+## Best Practices
+- Use `get_project_context` at the start to understand the project structure
+- Use `git_status` before making changes to understand the current state
+- Use `search_codebase` to find relevant code before making edits
+- Use `run_tests` after making changes to verify correctness
+- Use `git_diff` to review changes before committing
 
 Available tools:
 "#;

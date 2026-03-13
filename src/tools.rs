@@ -118,9 +118,13 @@ async fn list_files_handler(arg: &str) -> Result<ToolOutput> {
         }
     }
     names.sort();
-    let content = names.join("\n");
-    let status = format!("Listed {} files in {}", names.len(), arg);
-    Ok(ToolOutput::Text { content, status })
+    if names.is_empty() {
+        Ok(ToolOutput::StatusOnly { status: format!("No files found in {arg}") })
+    } else {
+        let content = names.join("\n");
+        let status = format!("Listed {} files in {}", names.len(), arg);
+        Ok(ToolOutput::Text { content, status })
+    }
 }
 
 async fn read_file_handler(arg: &str) -> Result<ToolOutput> {
@@ -128,8 +132,12 @@ async fn read_file_handler(arg: &str) -> Result<ToolOutput> {
         anyhow::bail!("read_file: path argument must be on a single line (no newlines)");
     }
     let content = fs::read_to_string(arg).await?;
-    let status = format!("Read file at {arg}");
-    Ok(ToolOutput::Text { content, status })
+    if content.is_empty() {
+        Ok(ToolOutput::StatusOnly { status: format!("File is empty: {arg}") })
+    } else {
+        let status = format!("Read file at {arg}");
+        Ok(ToolOutput::Text { content, status })
+    }
 }
 
 async fn create_directory_handler(arg: &str) -> Result<ToolOutput> {
@@ -246,9 +254,14 @@ async fn fetch_url_handler(arg: &str) -> Result<ToolOutput> {
         anyhow::bail!("HTTP error {status_code}: {url}");
     }
     let content = response.text().await?;
-    let size = content.len();
-    let status = format!("Fetched URL: {url} ({size} bytes)");
-    Ok(ToolOutput::Text { content, status })
+    if content.is_empty() {
+        let status = format!("Fetched URL (empty response): {url}");
+        Ok(ToolOutput::StatusOnly { status })
+    } else {
+        let size = content.len();
+        let status = format!("Fetched URL: {url} ({size} bytes)");
+        Ok(ToolOutput::Text { content, status })
+    }
 }
 
 async fn search_web_handler(arg: &str) -> Result<ToolOutput> {
@@ -450,11 +463,15 @@ async fn git_log_handler(arg: &str) -> Result<ToolOutput> {
         anyhow::bail!("git log failed: {stderr}");
     }
 
-    let status = format!("Showed last {limit} commits");
-    Ok(ToolOutput::Text {
-        content: stdout.to_string(),
-        status,
-    })
+    if stdout.is_empty() {
+        Ok(ToolOutput::StatusOnly { status: format!("No commits found (limit {limit})") })
+    } else {
+        let status = format!("Showed last {} commits", stdout.lines().count());
+        Ok(ToolOutput::Text {
+            content: stdout.to_string(),
+            status,
+        })
+    }
 }
 
 async fn git_commit_handler(arg: &str) -> Result<ToolOutput> {
@@ -647,16 +664,24 @@ async fn run_tests_handler(arg: &str) -> Result<ToolOutput> {
         result.push_str(&stderr);
     }
 
-    let status = if exit_code == 0 {
-        format!("Tests passed ({} cmd: {})", cmd_name, cmd_args.join(" "))
+    if result.is_empty() {
+        let status = if exit_code == 0 {
+            format!("Tests passed with no output ({} cmd: {})", cmd_name, cmd_args.join(" "))
+        } else {
+            format!("Tests failed with no output (exit code: {exit_code})")
+        };
+        Ok(ToolOutput::StatusOnly { status })
     } else {
-        format!("Tests failed (exit code: {exit_code})")
-    };
-
-    Ok(ToolOutput::Text {
-        content: result,
-        status,
-    })
+        let status = if exit_code == 0 {
+            format!("Tests passed ({} cmd: {})", cmd_name, cmd_args.join(" "))
+        } else {
+            format!("Tests failed (exit code: {exit_code})")
+        };
+        Ok(ToolOutput::Text {
+            content: result,
+            status,
+        })
+    }
 }
 
 // ============================================================================
@@ -902,8 +927,12 @@ fn browser_get_html_handler(_arg: &str) -> ToolFuture<'_> {
         let mut guard = state_arc.lock().await;
         let state = guard.as_mut().unwrap();
         let content = state.current_page().content().await?;
-        let status = format!("Retrieved HTML from current page ({} bytes)", content.len());
-        Ok(ToolOutput::Text { content, status })
+        if content.is_empty() {
+            Ok(ToolOutput::StatusOnly { status: "Page HTML is empty".to_string() })
+        } else {
+            let status = format!("Retrieved HTML from current page ({} bytes)", content.len());
+            Ok(ToolOutput::Text { content, status })
+        }
     })
 }
 

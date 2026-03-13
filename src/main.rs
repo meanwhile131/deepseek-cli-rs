@@ -235,14 +235,18 @@ async fn run_chat(
                     vec![], // ref_file_ids
                 );
                 let mut rx = tx.subscribe();
-                let final_message = handle_stream(stream, &mut rx).await?;
-                let Some(mut current_msg) = final_message else {
-                    // Stream was interrupted; return to input prompt silently
-                    continue;
+                let final_message = match handle_stream(stream, &mut rx).await {
+                    Ok(Some(msg)) => msg,
+                    Ok(None) => continue,
+                    Err(e) => {
+                        eprintln!("Error during streaming: {e}");
+                        continue;
+                    }
                 };
-                parent_id = current_msg.message_id;
+                parent_id = final_message.message_id;
+                let mut current_msg = final_message;
 
-                loop {
+                'assistant: loop {
                     // Ensure non-empty response
                     while current_msg.content.trim().is_empty() {
                         eprintln!(
@@ -259,33 +263,31 @@ async fn run_chat(
                             vec![], // ref_file_ids
                         );
                         let mut rx_inner = tx.subscribe();
-                        let new_msg = handle_stream(stream, &mut rx_inner).await?;
-                        match new_msg {
-                            Some(msg) => {
-                                parent_id = msg.message_id;
-                                current_msg = msg;
+                        let new_msg = match handle_stream(stream, &mut rx_inner).await {
+                            Ok(Some(msg)) => msg,
+                            Ok(None) => continue 'outer,
+                            Err(e) => {
+                                eprintln!("Error during streaming for empty response: {e}");
+                                break 'assistant;
                             }
-                            None => {
-                                // Stream interrupted during reprompt; go back to user input silently
-                                continue 'outer;
-                            }
-                        }
+                        };
+                        parent_id = new_msg.message_id;
+                        current_msg = new_msg;
                     }
 
                     // Handle tool calls
-                    match handle_tool_calls(&api, &chat_id, current_msg, &mut parent_id, &mut rx)
-                        .await?
-                    {
-                        Some(new_msg) => {
+                    match handle_tool_calls(&api, &chat_id, current_msg, &mut parent_id, &mut rx).await {
+                        Ok(Some(new_msg)) => {
                             current_msg = new_msg;
-                            // parent_id already updated inside handle_tool_calls
+                            // continue loop
                         }
-                        None => {
-                            // No more tool calls, done with this assistant turn
-                            break;
+                        Ok(None) => break 'assistant,
+                        Err(e) => {
+                            eprintln!("Error during tool call processing: {e}");
+                            break 'assistant;
                         }
                     }
-                }
+                } // end 'assistant loop
             }
         }
     }
@@ -498,11 +500,14 @@ async fn handle_tool_calls(
         true,
         file_ids,
     );
-    let new_msg = handle_stream(stream, ctrl_rx).await?;
-    if let Some(msg) = new_msg {
-        *parent_id = msg.message_id;
-        Ok(Some(msg))
-    } else {
-        Ok(None)
-    }
+    let new_msg = match handle_stream(stream, ctrl_rx).await {
+        Ok(Some(msg)) => msg,
+        Ok(None) => return Ok(None),
+        Err(e) => {
+            eprintln!("Error during tool response streaming: {e}");
+            return Ok(None);
+        }
+    };
+    *parent_id = new_msg.message_id;
+    Ok(Some(new_msg))
 }

@@ -4,7 +4,6 @@ use deepseek_api::{DeepSeekAPI, StreamChunk, models::Message};
 use futures_util::{Stream, StreamExt, pin_mut};
 use std::env;
 use std::io::Write;
-use std::path::Path;
 
 use colored::Colorize;
 use deepseek_cli::tools;
@@ -294,62 +293,7 @@ async fn run_chat(
     Ok(())
 }
 
-async fn upload_tool_output(
-    api: &DeepSeekAPI,
-    content: &str,
-    tool_name: &str,
-    full_arg: &str,
-) -> Result<String> {
-    use std::time::{SystemTime, UNIX_EPOCH};
 
-    // Generate filename based on tool type
-    let filename = match tool_name {
-        "read_file" => {
-            // Extract original filename from the path argument
-            let path_str = full_arg.lines().next().unwrap_or("");
-            Path::new(path_str)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map_or_else(
-                    || {
-                        let timestamp = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap()
-                            .as_nanos();
-                        format!("read_file_{timestamp}.txt")
-                    },
-                    ToString::to_string,
-                )
-        }
-        "fetch_url" => {
-            // Create a filename from the URL
-            let url_part = full_arg.lines().next().unwrap_or("url");
-            // Remove protocol and replace non-alphanumeric characters
-            let url_clean = url_part
-                .replace("https://", "")
-                .replace("http://", "")
-                .replace(|c: char| !c.is_alphanumeric() && c != '.', "_");
-            format!("{url_clean}.html")
-        }
-        "browser_get_html" => {
-            // Try to get a descriptive name from the URL or use default
-            let url_part = full_arg.lines().next().unwrap_or("page");
-            let sanitized = url_part.replace(|c: char| !c.is_alphanumeric() && c != '.', "_");
-            format!("{sanitized}.html")
-        }
-        _ => {
-            let timestamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            format!("tool_result_{tool_name}_{timestamp}.txt")
-        }
-    };
-
-    let file_data = content.as_bytes().to_vec();
-    let file_info = api.upload_file(file_data, &filename, None).await?;
-    Ok(file_info.id)
-}
 
 fn parse_tool_invocations(content: &str) -> Vec<(String, String)> {
     let lines: Vec<&str> = content.lines().collect();
@@ -411,28 +355,8 @@ async fn process_single_tool(
 
             match tool_output {
                 ToolOutput::Text { content, status } => {
-                    // Tools that should upload their output as files
-                    let upload_tools = [
-                        "read_file",
-                        "fetch_url",
-                        "list_files",
-                        "run_command",
-                        "search_web",
-                        "browser_get_html",
-                    ];
-                    if upload_tools.contains(&tool_name) {
-                        // Upload the content
-                        match upload_tool_output(api, &content, tool_name, full_arg).await {
-                            Ok(file_id) => (Some(file_id), status),
-                            Err(e) => {
-                                eprintln!("Failed to upload tool output: {e}");
-                                (None, format!("{status}\n\n{content}"))
-                            }
-                        }
-                    } else {
-                        // Just return the status as the message, no file upload
-                        (None, status)
-                    }
+                    // Return text content inline, don't upload
+                    (None, format!("{}\n\n{}", status, content))
                 }
                 ToolOutput::Binary {
                     data,

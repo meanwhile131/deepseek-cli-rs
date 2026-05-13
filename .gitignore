@@ -1,3 +1,4 @@
 /target
 .env
 .deepseek_history
+.cargo/config.toml

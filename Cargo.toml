@@ -30,6 +30,7 @@ regex = "1.10"
 strip = true
 lto = true
 codegen-units = 1
+opt-level = "z"
 
 [lints.clippy]
 pedantic = "warn"

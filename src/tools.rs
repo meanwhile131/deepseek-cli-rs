@@ -70,9 +70,7 @@ fn to_relative_path(path: &Path) -> String {
     if path == cwd {
         return ".".to_string();
     }
-    path.strip_prefix(&cwd)
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| path.to_string_lossy().to_string())
+    path.strip_prefix(&cwd).map_or_else(|_| path.to_string_lossy().to_string(), |p| p.to_string_lossy().to_string())
 }
 
 /// Represents the result of executing a tool.
@@ -108,7 +106,7 @@ async fn list_files_handler(arg: &str) -> Result<ToolOutput> {
     let path = Path::new(arg);
     let display_path = to_relative_path(path);
     if !path.is_dir() {
-        anyhow::bail!("Not a directory: {}", display_path);
+        anyhow::bail!("Not a directory: {display_path}");
     }
 
     // Find git root for .gitignore checking
@@ -131,7 +129,7 @@ async fn list_files_handler(arg: &str) -> Result<ToolOutput> {
     }
     names.sort();
     if names.is_empty() {
-        Ok(ToolOutput::StatusOnly { status: format!("No files found in {}", display_path) })
+        Ok(ToolOutput::StatusOnly { status: format!("No files found in {display_path}") })
     } else {
         let content = names.join("\n");
         let status = format!("Listed {} files in {}", names.len(), display_path);
@@ -147,9 +145,9 @@ async fn read_file_handler(arg: &str) -> Result<ToolOutput> {
     let display_path = to_relative_path(path);
     let content = fs::read_to_string(path).await?;
     if content.is_empty() {
-        Ok(ToolOutput::StatusOnly { status: format!("File is empty: {}", display_path) })
+        Ok(ToolOutput::StatusOnly { status: format!("File is empty: {display_path}") })
     } else {
-        let status = format!("Read file at {}", display_path);
+        let status = format!("Read file at {display_path}");
         Ok(ToolOutput::Text { content, status })
     }
 }
@@ -161,7 +159,7 @@ async fn create_directory_handler(arg: &str) -> Result<ToolOutput> {
     let path = Path::new(arg);
     let display_path = to_relative_path(path);
     fs::create_dir_all(path).await?;
-    let status = format!("Directory created: {}", display_path);
+    let status = format!("Directory created: {display_path}");
     Ok(ToolOutput::StatusOnly { status })
 }
 
@@ -201,7 +199,7 @@ async fn apply_search_replace_handler(arg: &str) -> Result<ToolOutput> {
     let mut content = fs::read_to_string(&file_path).await?;
     for (search, replace) in &blocks {
         if !content.contains(search) {
-            anyhow::bail!("Search string not found in {}: {:?}", display_path, search);
+            anyhow::bail!("Search string not found in {display_path}: {search:?}");
         }
         content = content.replace(search, replace);
     }
@@ -260,7 +258,7 @@ async fn write_file_handler(arg: &str) -> Result<ToolOutput> {
     }
 
     fs::write(&file_path, &content).await?;
-    let status = format!("File written: {}", display_path);
+    let status = format!("File written: {display_path}");
     Ok(ToolOutput::StatusOnly { status })
 }
 
@@ -425,7 +423,7 @@ async fn git_status_handler(arg: &str) -> Result<ToolOutput> {
         stdout.to_string()
     };
 
-    let status = format!("Git status for {}", display_git_root);
+    let status = format!("Git status for {display_git_root}");
     Ok(ToolOutput::Text { content, status })
 }
 
@@ -741,7 +739,7 @@ async fn get_project_context_handler(_arg: &str) -> Result<ToolOutput> {
     };
     writeln!(context, "Project Type: {project_type}").unwrap();
 
-    writeln!(context, "Project Root: {}", display_git_root).unwrap();
+    writeln!(context, "Project Root: {display_git_root}").unwrap();
 
     // Git info
     let git_output = Command::new("git")
@@ -812,7 +810,7 @@ async fn get_project_context_handler(_arg: &str) -> Result<ToolOutput> {
         }
     }
 
-    let status = format!("Project context for {}", display_git_root);
+    let status = format!("Project context for {display_git_root}");
     Ok(ToolOutput::Text { content: context, status })
 }
 

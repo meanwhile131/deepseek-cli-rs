@@ -100,15 +100,13 @@ where
                 if err_str.contains("Messages too frequent") {
                     attempt += 1;
                     eprintln!(
-                        "Rate limited, retrying in {:?}... (attempt {})",
-                        delay, attempt
+                        "Rate limited, retrying in {delay:?}... (attempt {attempt})"
                     );
                     tokio::time::sleep(delay).await;
                     delay = std::cmp::min(delay * 2, max_delay);
                     continue;
-                } else {
-                    return Err(e);
                 }
+                return Err(e);
             }
         }
     }
@@ -242,101 +240,7 @@ async fn run_chat(
             UserInput::Exit => break 'outer,
             UserInput::Interrupted => {}
             UserInput::Message(full_input) => {
-                if full_input.is_empty() {
-                    continue;
-                }
-                // Add full input to history as a single entry
-                if let Err(e) = rl.lock().unwrap().add_history_entry(&full_input) {
-                    eprintln!("Failed to add history entry: {e}");
-                }
-
-                // Prepend system prompt and project context only on the very first message
-                let prompt = if parent_id.is_none() {
-                    format!(
-                        "{}\n\n## Current Project Context\n{}\n\nUser:\n{}",
-                        SYSTEM_PROMPT.as_str(),
-                        project_context,
-                        full_input
-                    )
-                } else {
-                    full_input.clone()
-                };
-
-                // Stream the assistant's response
-                let mut rx = tx.subscribe();
-                let final_message = match stream_with_retry(
-                    || async {
-                        Ok(api.complete_stream(
-                            chat_id.clone(),
-                            prompt.clone(),
-                            parent_id,
-                            true,
-                            true,
-                            vec![],
-                        ))
-                    },
-                    &mut rx,
-                )
-                .await
-                {
-                    Ok(Some(msg)) => msg,
-                    Ok(None) => continue,
-                    Err(e) => {
-                        eprintln!("Error during streaming: {e}");
-                        continue;
-                    }
-                };
-                parent_id = final_message.message_id;
-                let mut current_msg = final_message;
-
-                'assistant: loop {
-                    // Ensure non-empty response
-                    while current_msg.content.trim().is_empty() {
-                        eprintln!(
-                            "{}",
-                            "Model returned empty response, reprompting with warning...".yellow()
-                        );
-                        let warning = "WARNING: Your previous response was empty. Please provide a meaningful response or use tools as appropriate.\n\nContinue with the next step or provide the final answer.";
-                        let mut rx_inner = tx.subscribe();
-                        let new_msg = match stream_with_retry(
-                            || async {
-                                Ok(api.complete_stream(
-                                    chat_id.clone(),
-                                    warning.to_string(),
-                                    parent_id,
-                                    true,
-                                    true,
-                                    vec![],
-                                ))
-                            },
-                            &mut rx_inner,
-                        )
-                        .await
-                        {
-                            Ok(Some(msg)) => msg,
-                            Ok(None) => continue 'outer,
-                            Err(e) => {
-                                eprintln!("Error during streaming for empty response: {e}");
-                                break 'assistant;
-                            }
-                        };
-                        parent_id = new_msg.message_id;
-                        current_msg = new_msg;
-                    }
-
-                    // Handle tool calls
-                    match handle_tool_calls(&api, &chat_id, current_msg, &mut parent_id, &mut rx).await {
-                        Ok(Some(new_msg)) => {
-                            current_msg = new_msg;
-                            // continue loop
-                        }
-                        Ok(None) => break 'assistant,
-                        Err(e) => {
-                            eprintln!("Error during tool call processing: {e}");
-                            break 'assistant;
-                        }
-                    }
-                } // end 'assistant loop
+                handle_user_message(&api, &chat_id, &mut parent_id, &tx, &rl, &project_context, full_input).await?;
             }
         }
     }
@@ -406,7 +310,7 @@ async fn process_single_tool(
             match tool_output {
                 ToolOutput::Text { content, status } => {
                     // Return text content inline, don't upload
-                    (None, format!("{}\n\n{}", status, content))
+                    (None, format!("{status}\n\n{content}"))
                 }
                 ToolOutput::Binary {
                     data,
@@ -490,4 +394,120 @@ async fn handle_tool_calls(
     };
     *parent_id = new_msg.message_id;
     Ok(Some(new_msg))
+}
+
+async fn handle_user_message(
+    api: &DeepSeekAPI,
+    chat_id: &str,
+    parent_id: &mut Option<i64>,
+    tx: &broadcast::Sender<()>,
+    rl: &Arc<Mutex<DefaultEditor>>,
+    project_context: &str,
+    full_input: String,
+) -> Result<()> {
+    if full_input.is_empty() {
+        return Ok(());
+    }
+    // Add full input to history as a single entry
+    if let Err(e) = rl.lock().unwrap().add_history_entry(&full_input) {
+        eprintln!("Failed to add history entry: {e}");
+    }
+
+    // Prepend system prompt and project context only on the very first message
+    let prompt = if parent_id.is_none() {
+        format!(
+            "{}\n\n## Current Project Context\n{}\n\nUser:\n{}",
+            SYSTEM_PROMPT.as_str(),
+            project_context,
+            full_input
+        )
+    } else {
+        full_input.clone()
+    };
+
+    // Stream the assistant's response
+    let mut rx = tx.subscribe();
+    let final_message = match stream_with_retry(
+        || async {
+            Ok(api.complete_stream(
+                chat_id.to_string(),
+                prompt.clone(),
+                *parent_id,
+                true,
+                true,
+                vec![],
+            ))
+        },
+        &mut rx,
+    )
+    .await
+    {
+        Ok(Some(msg)) => msg,
+        Ok(None) => return Ok(()),
+        Err(e) => {
+            eprintln!("Error during streaming: {e}");
+            return Ok(());
+        }
+    };
+    *parent_id = final_message.message_id;
+    let current_msg = final_message;
+
+    process_assistant_response(api, chat_id, current_msg, parent_id, &mut rx).await
+}
+
+async fn process_assistant_response(
+    api: &DeepSeekAPI,
+    chat_id: &str,
+    mut current_msg: Message,
+    parent_id: &mut Option<i64>,
+    ctrl_rx: &mut broadcast::Receiver<()>,
+) -> Result<()> {
+    loop {
+        // Ensure non-empty response
+        while current_msg.content.trim().is_empty() {
+            eprintln!(
+                "{}",
+                "Model returned empty response, reprompting with warning...".yellow()
+            );
+            let warning = "WARNING: Your previous response was empty. Please provide a meaningful response or use tools as appropriate.\n\nContinue with the next step or provide the final answer.";
+            let new_msg = match stream_with_retry(
+                || async {
+                    Ok(api.complete_stream(
+                        chat_id.to_string(),
+                        warning.to_string(),
+                        *parent_id,
+                        true,
+                        true,
+                        vec![],
+                    ))
+                },
+                ctrl_rx,
+            )
+            .await
+            {
+                Ok(Some(msg)) => msg,
+                Ok(None) => return Ok(()),
+                Err(e) => {
+                    eprintln!("Error during streaming for empty response: {e}");
+                    return Ok(());
+                }
+            };
+            *parent_id = new_msg.message_id;
+            current_msg = new_msg;
+        }
+
+        // Handle tool calls
+        match handle_tool_calls(api, chat_id, current_msg, parent_id, ctrl_rx).await {
+            Ok(Some(new_msg)) => {
+                current_msg = new_msg;
+                // continue loop
+            }
+            Ok(None) => break,
+            Err(e) => {
+                eprintln!("Error during tool call processing: {e}");
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
 }

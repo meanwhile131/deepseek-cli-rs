@@ -257,15 +257,18 @@ fn parse_tool_invocations(content: &str) -> Vec<(String, String)> {
     let mut i = 0;
     let mut invocations = Vec::new();
     while i < lines.len() {
-        let line = lines[i].trim();
-        if let Some(stripped) = line.strip_prefix("TOOL:") {
-            let tool_line = stripped.trim();
-            let mut tool_parts = tool_line.splitn(2, ' ');
+        // Allow leading whitespace before TOOL:
+        let trimmed_line = lines[i].trim();
+        if trimmed_line.starts_with("TOOL:") {
+            // Extract the part after "TOOL:" (case-insensitive? but we'll keep exact)
+            let after_tool = trimmed_line.strip_prefix("TOOL:").unwrap_or("").trim();
+            let mut tool_parts = after_tool.splitn(2, ' ');
             let tool_name = tool_parts.next().unwrap_or("").to_string();
             let first_arg = tool_parts.next().unwrap_or("").to_string();
 
             let mut body_lines = Vec::new();
             i += 1;
+            // Collect lines until we find another line that starts with "TOOL:" (ignoring leading whitespace)
             while i < lines.len() && !lines[i].trim().starts_with("TOOL:") {
                 body_lines.push(lines[i]);
                 i += 1;
@@ -279,7 +282,10 @@ fn parse_tool_invocations(content: &str) -> Vec<(String, String)> {
             } else {
                 format!("{first_arg}\n{body}")
             };
-            invocations.push((tool_name, full_arg));
+            // Don't add empty tool names
+            if !tool_name.is_empty() {
+                invocations.push((tool_name, full_arg));
+            }
         } else {
             i += 1;
         }
@@ -292,14 +298,18 @@ async fn process_single_tool(
     tool_name: &str,
     full_arg: &str,
 ) -> (Option<String>, String) {
-    // Validate single-line path tools
+    // For single-line path tools, extract first line if multiple lines provided
     let single_line_path_tools = ["read_file", "create_directory", "list_files"];
-    if single_line_path_tools.contains(&tool_name) && full_arg.contains('\n') {
-        let err_msg = format!("TOOL {tool_name} failed: path argument must be on a single line (no newlines)");
-        eprintln!("{}", err_msg.red());
-        return (None, err_msg);
-    }
-    match execute_tool(tool_name, full_arg).await {
+    let arg_to_use = if single_line_path_tools.contains(&tool_name) && full_arg.contains('\n') {
+        let first_line = full_arg.lines().next().unwrap_or("").trim().to_string();
+        if !first_line.is_empty() {
+            eprintln!("{}", format!("Note: path argument contained newlines; using only the first line: '{first_line}'").yellow());
+        }
+        first_line
+    } else {
+        full_arg.trim().to_string()
+    };
+    match execute_tool(tool_name, &arg_to_use).await {
         Ok(tool_output) => {
             // Print status for all variants
             let status = match &tool_output {

@@ -76,6 +76,44 @@ where
     Ok(final_message)
 }
 
+
+
+
+async fn stream_with_retry<S, F, Fut>(
+    mut stream_factory: F,
+    ctrl_rx: &mut broadcast::Receiver<()>,
+) -> Result<Option<Message>>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<S>>,
+    S: Stream<Item = Result<StreamChunk>>,
+{
+    let mut delay = tokio::time::Duration::from_secs(5);
+    let max_delay = tokio::time::Duration::from_secs(60);
+    let mut attempt = 0;
+    loop {
+        let stream = stream_factory().await?;
+        match handle_stream(stream, ctrl_rx).await {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                let err_str = e.to_string();
+                if err_str.contains("Messages too frequent") {
+                    attempt += 1;
+                    eprintln!(
+                        "Rate limited, retrying in {:?}... (attempt {})",
+                        delay, attempt
+                    );
+                    tokio::time::sleep(delay).await;
+                    delay = std::cmp::min(delay * 2, max_delay);
+                    continue;
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+    }
+}
+
 async fn load_token() -> Result<String> {
     // Try environment variable first
     if let Ok(token) = env::var("DEEPSEEK_TOKEN") {
@@ -225,16 +263,22 @@ async fn run_chat(
                 };
 
                 // Stream the assistant's response
-                let stream = api.complete_stream(
-                    chat_id.clone(),
-                    prompt,
-                    parent_id,
-                    true,   // search
-                    true,   // thinking
-                    vec![], // ref_file_ids
-                );
                 let mut rx = tx.subscribe();
-                let final_message = match handle_stream(stream, &mut rx).await {
+                let final_message = match stream_with_retry(
+                    || async {
+                        Ok(api.complete_stream(
+                            chat_id.clone(),
+                            prompt.clone(),
+                            parent_id,
+                            true,
+                            true,
+                            vec![],
+                        ))
+                    },
+                    &mut rx,
+                )
+                .await
+                {
                     Ok(Some(msg)) => msg,
                     Ok(None) => continue,
                     Err(e) => {
@@ -253,16 +297,22 @@ async fn run_chat(
                             "Model returned empty response, reprompting with warning...".yellow()
                         );
                         let warning = "WARNING: Your previous response was empty. Please provide a meaningful response or use tools as appropriate.\n\nContinue with the next step or provide the final answer.";
-                        let stream = api.complete_stream(
-                            chat_id.clone(),
-                            warning.to_string(),
-                            parent_id,
-                            true,
-                            true,
-                            vec![], // ref_file_ids
-                        );
                         let mut rx_inner = tx.subscribe();
-                        let new_msg = match handle_stream(stream, &mut rx_inner).await {
+                        let new_msg = match stream_with_retry(
+                            || async {
+                                Ok(api.complete_stream(
+                                    chat_id.clone(),
+                                    warning.to_string(),
+                                    parent_id,
+                                    true,
+                                    true,
+                                    vec![],
+                                ))
+                            },
+                            &mut rx_inner,
+                        )
+                        .await
+                        {
                             Ok(Some(msg)) => msg,
                             Ok(None) => continue 'outer,
                             Err(e) => {
@@ -416,15 +466,21 @@ async fn handle_tool_calls(
         "{}\n\nContinue with the next step or provide the final answer.",
         result_messages.join("\n\n")
     );
-    let stream = api.complete_stream(
-        chat_id.to_string(),
-        next_prompt,
-        *parent_id,
-        true,
-        true,
-        file_ids,
-    );
-    let new_msg = match handle_stream(stream, ctrl_rx).await {
+    let new_msg = match stream_with_retry(
+        || async {
+            Ok(api.complete_stream(
+                chat_id.to_string(),
+                next_prompt.clone(),
+                *parent_id,
+                true,
+                true,
+                file_ids.clone(),
+            ))
+        },
+        ctrl_rx,
+    )
+    .await
+    {
         Ok(Some(msg)) => msg,
         Ok(None) => return Ok(None),
         Err(e) => {

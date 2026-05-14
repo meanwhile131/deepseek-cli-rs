@@ -237,7 +237,10 @@ async fn run_chat(
 
     'outer: loop {
         match collect_user_input(rl.clone()).await {
-            UserInput::Exit => break 'outer,
+            UserInput::Exit => {
+                println!("Chat ID: {chat_id}");
+                break 'outer;
+            }
             UserInput::Interrupted => {}
             UserInput::Message(full_input) => {
                 handle_user_message(&api, &chat_id, &mut parent_id, &tx, &rl, &project_context, full_input).await?;

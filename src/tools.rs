@@ -14,6 +14,7 @@ use tokio::fs;
 use tokio::process::Command;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use std::process::Stdio;
+use std::io::Write;
 use tokio::sync::Mutex;
 use tokio::time::{Duration, timeout};
 use urlencoding::encode;
@@ -216,12 +217,14 @@ async fn run_command_handler(arg: &str) -> Result<ToolOutput> {
         .args(&["/c", arg])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .env("PYTHONUNBUFFERED", "1")
         .spawn()?;
     #[cfg(not(windows))]
     let mut child = Command::new("sh")
         .args(["-c", arg])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .env("PYTHONUNBUFFERED", "1")
         .spawn()?;
 
     let stdout_handle = child.stdout.take().expect("failed to capture stdout");
@@ -236,6 +239,7 @@ async fn run_command_handler(arg: &str) -> Result<ToolOutput> {
         let mut collected = Vec::new();
         while let Ok(Some(line)) = lines.next_line().await {
             println!("[stdout] {line}");
+            let _ = std::io::stdout().flush();
             collected.push(line);
         }
         collected
@@ -246,6 +250,7 @@ async fn run_command_handler(arg: &str) -> Result<ToolOutput> {
         let mut collected = Vec::new();
         while let Ok(Some(line)) = lines.next_line().await {
             eprintln!("[stderr] {line}");
+            let _ = std::io::stderr().flush();
             collected.push(line);
         }
         collected

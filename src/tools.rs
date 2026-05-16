@@ -12,6 +12,8 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 use tokio::fs;
 use tokio::process::Command;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use std::process::Stdio;
 use tokio::sync::Mutex;
 use tokio::time::{Duration, timeout};
 use urlencoding::encode;
@@ -210,36 +212,72 @@ async fn apply_search_replace_handler(arg: &str) -> Result<ToolOutput> {
 
 async fn run_command_handler(arg: &str) -> Result<ToolOutput> {
     #[cfg(windows)]
-    let output = Command::new("cmd").args(&["/c", arg]).output().await?;
+    let mut child = Command::new("cmd")
+        .args(&["/c", arg])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
     #[cfg(not(windows))]
-    let output = Command::new("sh").args(["-c", arg]).output().await?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let exit_code = output.status.code().unwrap_or(-1);
+    let mut child = Command::new("sh")
+        .args(["-c", arg])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    let stdout_handle = child.stdout.take().expect("failed to capture stdout");
+    let stderr_handle = child.stderr.take().expect("failed to capture stderr");
+
+    let stdout_reader = BufReader::new(stdout_handle);
+    let stderr_reader = BufReader::new(stderr_handle);
+
+    // Spawn tasks to read and print stdout and stderr concurrently
+    let stdout_task = tokio::spawn(async move {
+        let mut lines = stdout_reader.lines();
+        let mut collected = Vec::new();
+        while let Ok(Some(line)) = lines.next_line().await {
+            println!("[stdout] {line}");
+            collected.push(line);
+        }
+        collected
+    });
+
+    let stderr_task = tokio::spawn(async move {
+        let mut lines = stderr_reader.lines();
+        let mut collected = Vec::new();
+        while let Ok(Some(line)) = lines.next_line().await {
+            eprintln!("[stderr] {line}");
+            collected.push(line);
+        }
+        collected
+    });
+
+    let exit_status = child.wait().await?;
+    let stdout_lines_result = stdout_task.await.unwrap_or_default();
+    let stderr_lines_result = stderr_task.await.unwrap_or_default();
+
+    let exit_code = exit_status.code().unwrap_or(-1);
     let mut result = String::new();
-    if !stdout.is_empty() {
+    if !stdout_lines_result.is_empty() {
         result.push_str("stdout:\n");
-        result.push_str(&stdout);
+        result.push_str(&stdout_lines_result.join("\n"));
     }
-    if !stderr.is_empty() {
-        if !stdout.is_empty() {
+    if !stderr_lines_result.is_empty() {
+        if !stdout_lines_result.is_empty() {
             result.push_str("\n\n");
         }
         result.push_str("stderr:\n");
-        result.push_str(&stderr);
+        result.push_str(&stderr_lines_result.join("\n"));
     }
-    if stdout.is_empty() && stderr.is_empty() {
+    if stdout_lines_result.is_empty() && stderr_lines_result.is_empty() {
         result.push_str("Command executed with no output");
     }
+
     let status = if exit_code == 0 {
         "Command succeeded (exit code: 0)".to_string()
     } else {
         format!("Command failed (exit code: {exit_code})")
     };
-    Ok(ToolOutput::Text {
-        content: result,
-        status,
-    })
+    Ok(ToolOutput::Text { content: result, status })
 }
 
 async fn write_file_handler(arg: &str) -> Result<ToolOutput> {

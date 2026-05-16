@@ -534,7 +534,12 @@ async fn git_log_handler(arg: &str) -> Result<ToolOutput> {
 }
 
 async fn git_commit_handler(arg: &str) -> Result<ToolOutput> {
-    let message = arg.trim();
+    let raw_message = arg.trim();
+    let message = if raw_message.starts_with('"') && raw_message.ends_with('"') && raw_message.len() >= 2 {
+        &raw_message[1..raw_message.len()-1]
+    } else {
+        raw_message
+    };
     if message.is_empty() {
         anyhow::bail!("Commit message cannot be empty");
     }

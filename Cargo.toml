@@ -26,6 +26,9 @@ base64 = "0.22"
 chrono = "0.4"
 regex = "1.10"
 
+[dev-dependencies]
+tempfile = "3.19"
+
 [profile.release]
 strip = true
 lto = true

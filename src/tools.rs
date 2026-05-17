@@ -170,6 +170,13 @@ async fn read_file_handler(arg: &str) -> Result<ToolOutput> {
         Some(_) | None => total_lines,
     };
     
+    // Handle empty file: ignore offset/limit and return empty content
+    if total_lines == 0 {
+        return Ok(ToolOutput::StatusOnly {
+            status: format!("File is empty: {display_path}"),
+        });
+    }
+    
     if start_idx >= total_lines {
         anyhow::bail!("Offset line {} exceeds total lines {}", offset_line.unwrap_or(0), total_lines);
     }
@@ -179,7 +186,7 @@ async fn read_file_handler(arg: &str) -> Result<ToolOutput> {
     
     if content.is_empty() {
         Ok(ToolOutput::StatusOnly {
-            status: format!("File is empty or no lines selected: {display_path} (lines {}-{})", 
+            status: format!("No lines selected (empty range) in {display_path} (lines {}-{})", 
                 start_idx + 1, end_idx),
         })
     } else {

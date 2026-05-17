@@ -12,13 +12,27 @@ env:
 jobs:
   build:
 
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
 
     steps:
     - uses: actions/checkout@v4
     - name: Cache cargo dependencies
       uses: Swatinem/rust-cache@v2
     - name: Build
-      run: cargo build --verbose
+      run: cargo build --verbose --release
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test --verbose --release
+    - name: Get binary name
+      id: bin
+      run: |
+        BIN_NAME=$(cargo metadata --format-version=1 --no-deps | jq -r '.packages[0].targets[] | select(.kind[] | contains("bin")) | .name' | head -1)
+        echo "name=${BIN_NAME}" >> $GITHUB_OUTPUT
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.bin.outputs.name }}-${{ matrix.os }}
+        path: target/release/${{ steps.bin.outputs.name }}${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+        if-no-files-found: error

@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 use tokio::fs;
 use tokio::process::Command;
+use tokio::io::{AsyncBufReadExt, BufReader};
 
 use std::io::Write;
 use std::process::Stdio;
@@ -231,54 +232,89 @@ async fn run_command_handler(arg: &str) -> Result<ToolOutput> {
     #[cfg(not(windows))]
     let cmd = cmd.args(["-c", arg]);
 
-    let cmd = cmd
+    let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::null())
-        .env("PYTHONUNBUFFERED", "1");
+        .env("PYTHONUNBUFFERED", "1")
+        .spawn()?;
 
-    let output_future = cmd.output();
-    let output = tokio::time::timeout(timeout_duration, output_future)
+    let stdout = child.stdout.take().expect("Failed to capture stdout");
+    let stderr = child.stderr.take().expect("Failed to capture stderr");
+
+    let mut stdout_reader = BufReader::new(stdout).lines();
+    let mut stderr_reader = BufReader::new(stderr).lines();
+
+    let mut stdout_lines = Vec::new();
+    let mut stderr_lines = Vec::new();
+    let mut stdout_done = false;
+    let mut stderr_done = false;
+    let mut exit_code = 0;
+
+    let read_loop = async {
+        loop {
+            if stdout_done && stderr_done {
+                break;
+            }
+            tokio::select! {
+                line = stdout_reader.next_line(), if !stdout_done => {
+                    match line {
+                        Ok(Some(l)) => {
+                            println!("[stdout] {l}");
+                            let _ = std::io::stdout().flush();
+                            stdout_lines.push(l);
+                        }
+                        Ok(None) => {
+                            stdout_done = true;
+                        }
+                        Err(e) => return Err(anyhow!("Error reading stdout: {e}")),
+                    }
+                }
+                line = stderr_reader.next_line(), if !stderr_done => {
+                    match line {
+                        Ok(Some(l)) => {
+                            eprintln!("[stderr] {l}");
+                            let _ = std::io::stderr().flush();
+                            stderr_lines.push(l);
+                        }
+                        Ok(None) => {
+                            stderr_done = true;
+                        }
+                        Err(e) => return Err(anyhow!("Error reading stderr: {e}")),
+                    }
+                }
+                result = child.wait() => {
+                    let status = result?;
+                    exit_code = status.code().unwrap_or(-1);
+                    // Continue reading remaining lines; the streams will close naturally.
+                }
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    };
+
+    tokio::time::timeout(timeout_duration, read_loop)
         .await
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "Command timed out after {} seconds",
-                timeout_duration.as_secs()
-            )
-        })?
-        .map_err(|e| anyhow::anyhow!("Failed to execute command: {e}"))?;
+        .map_err(|_| anyhow::anyhow!("Command timed out after {} seconds", timeout_duration.as_secs()))?
+        .map_err(|e| anyhow::anyhow!("Command execution failed: {e}"))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let exit_code = output.status.code().unwrap_or(-1);
-
-    // Print the output for visibility
-    if !stdout.is_empty() {
-        for line in stdout.lines() {
-            println!("[stdout] {line}");
-        }
-        let _ = std::io::stdout().flush();
-    }
-    if !stderr.is_empty() {
-        for line in stderr.lines() {
-            eprintln!("[stderr] {line}");
-        }
-        let _ = std::io::stderr().flush();
-    }
+    // Build result string from captured lines
+    let stdout_str = stdout_lines.join("\n");
+    let stderr_str = stderr_lines.join("\n");
 
     let mut result = String::new();
-    if !stdout.is_empty() {
+    if !stdout_str.is_empty() {
         result.push_str("stdout:\n");
-        result.push_str(&stdout);
+        result.push_str(&stdout_str);
     }
-    if !stderr.is_empty() {
-        if !stdout.is_empty() {
+    if !stderr_str.is_empty() {
+        if !stdout_str.is_empty() {
             result.push_str("\n\n");
         }
         result.push_str("stderr:\n");
-        result.push_str(&stderr);
+        result.push_str(&stderr_str);
     }
-    if stdout.is_empty() && stderr.is_empty() {
+    if stdout_str.is_empty() && stderr_str.is_empty() {
         result.push_str("Command executed with no output");
     }
 

@@ -147,18 +147,56 @@ async fn list_files_handler(arg: &str) -> Result<ToolOutput> {
 }
 
 async fn read_file_handler(arg: &str) -> Result<ToolOutput> {
-    if arg.contains('\n') {
-        anyhow::bail!("read_file: path argument must be on a single line (no newlines)");
+    // Parse arguments: path [offset] [limit]
+    let parts: Vec<&str> = arg.split_whitespace().collect();
+    if parts.is_empty() {
+        anyhow::bail!("read_file: missing file path");
     }
-    let path = Path::new(arg);
+    let path_str = parts[0];
+    let mut offset_line: Option<usize> = None;
+    let mut limit: Option<usize> = None;
+    if parts.len() > 1 {
+        offset_line = parts[1].parse().ok();
+    }
+    if parts.len() > 2 {
+        limit = parts[2].parse().ok();
+    }
+    
+    let path = Path::new(path_str);
     let display_path = to_relative_path(path);
-    let content = fs::read_to_string(path).await?;
+    let full_content = fs::read_to_string(path).await?;
+    
+    // Split into lines
+    let lines: Vec<&str> = full_content.lines().collect();
+    let total_lines = lines.len();
+    
+    // Determine line range (1-indexed offset)
+    let start_idx = match offset_line {
+        Some(offset) if offset > 0 => offset - 1,
+        Some(_) => 0,
+        None => 0,
+    };
+    let end_idx = match limit {
+        Some(lim) if lim > 0 => (start_idx + lim).min(total_lines),
+        Some(_) => total_lines,
+        None => total_lines,
+    };
+    
+    if start_idx >= total_lines {
+        anyhow::bail!("Offset line {} exceeds total lines {}", offset_line.unwrap_or(0), total_lines);
+    }
+    
+    let selected_lines = &lines[start_idx..end_idx];
+    let content = selected_lines.join("\n");
+    
     if content.is_empty() {
         Ok(ToolOutput::StatusOnly {
-            status: format!("File is empty: {display_path}"),
+            status: format!("File is empty or no lines selected: {display_path} (lines {}-{})", 
+                start_idx + 1, end_idx),
         })
     } else {
-        let status = format!("Read file at {display_path}");
+        let status = format!("Read file at {display_path} (lines {}-{} of {})", 
+            start_idx + 1, end_idx, total_lines);
         Ok(ToolOutput::Text { content, status })
     }
 }
@@ -1291,7 +1329,7 @@ static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
     m.insert(
         "read_file",
         Tool {
-            description: "read_file <file_path> : outputs the text contents of a file",
+            description: "read_file <file_path> [offset] [limit] : outputs the text contents of a file. Offset is 1-indexed line number to start from (default 1). Limit is number of lines to read (default all).",
             handler: Box::new(|s| Box::pin(read_file_handler(s))),
         },
     );

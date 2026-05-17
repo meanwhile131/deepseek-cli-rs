@@ -27,6 +27,7 @@ jobs:
       run: cargo test --verbose --release
     - name: Get binary name
       id: bin
+      shell: bash
       run: |
         BIN_NAME=$(cargo metadata --format-version=1 --no-deps | jq -r '.packages[0].targets[] | select(.kind[] | contains("bin")) | .name' | head -1)
         echo "name=${BIN_NAME}" >> $GITHUB_OUTPUT

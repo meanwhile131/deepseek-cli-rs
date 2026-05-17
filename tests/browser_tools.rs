@@ -37,7 +37,10 @@ async fn test_browser_tools() -> Result<()> {
 
         // Verify page loaded by checking title
         let title = execute_tool("browser_evaluate", "document.title").await?;
-        let ToolOutput::StatusOnly { status: eval_status } = &title else {
+        let ToolOutput::StatusOnly {
+            status: eval_status,
+        } = &title
+        else {
             panic!("Expected StatusOnly, got {title:?}")
         };
         assert!(
@@ -64,7 +67,10 @@ async fn test_browser_tools() -> Result<()> {
             "document.getElementById('status').innerText",
         )
         .await?;
-        let ToolOutput::StatusOnly { status: eval_status } = &eval_res else {
+        let ToolOutput::StatusOnly {
+            status: eval_status,
+        } = &eval_res
+        else {
             panic!("Expected StatusOnly, got {eval_res:?}")
         };
         assert!(
@@ -84,7 +90,11 @@ async fn test_browser_tools() -> Result<()> {
 
         // List tabs
         let tabs = execute_tool("browser_list_tabs", "").await?;
-        let ToolOutput::Text { content: tabs_content, .. } = &tabs else {
+        let ToolOutput::Text {
+            content: tabs_content,
+            ..
+        } = &tabs
+        else {
             panic!("Expected Text, got {tabs:?}")
         };
         assert!(
@@ -118,7 +128,11 @@ async fn test_browser_tools() -> Result<()> {
 
         // List tabs again (should only have one)
         let tabs = execute_tool("browser_list_tabs", "").await?;
-        let ToolOutput::Text { content: tabs_content, .. } = &tabs else {
+        let ToolOutput::Text {
+            content: tabs_content,
+            ..
+        } = &tabs
+        else {
             panic!("Expected Text, got {tabs:?}")
         };
         assert_eq!(

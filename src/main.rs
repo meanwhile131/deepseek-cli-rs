@@ -76,9 +76,6 @@ where
     Ok(final_message)
 }
 
-
-
-
 async fn stream_with_retry<S, F, Fut>(
     mut stream_factory: F,
     ctrl_rx: &mut broadcast::Receiver<()>,
@@ -99,9 +96,7 @@ where
                 let err_str = e.to_string();
                 if err_str.contains("Messages too frequent") {
                     attempt += 1;
-                    eprintln!(
-                        "Rate limited, retrying in {delay:?}... (attempt {attempt})"
-                    );
+                    eprintln!("Rate limited, retrying in {delay:?}... (attempt {attempt})");
                     tokio::time::sleep(delay).await;
                     delay = std::cmp::min(delay * 2, max_delay);
                     continue;
@@ -243,14 +238,21 @@ async fn run_chat(
             }
             UserInput::Interrupted => {}
             UserInput::Message(full_input) => {
-                handle_user_message(&api, &chat_id, &mut parent_id, &tx, &rl, &project_context, full_input).await?;
+                handle_user_message(
+                    &api,
+                    &chat_id,
+                    &mut parent_id,
+                    &tx,
+                    &rl,
+                    &project_context,
+                    full_input,
+                )
+                .await?;
             }
         }
     }
     Ok(())
 }
-
-
 
 fn parse_tool_invocations(content: &str) -> Vec<(String, String)> {
     let lines: Vec<&str> = content.lines().collect();

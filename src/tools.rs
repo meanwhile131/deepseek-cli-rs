@@ -12,9 +12,9 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 use tokio::fs;
 use tokio::process::Command;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use std::process::Stdio;
+
 use std::io::Write;
+use std::process::Stdio;
 use tokio::sync::Mutex;
 use tokio::time::{Duration, timeout};
 use urlencoding::encode;
@@ -73,7 +73,10 @@ fn to_relative_path(path: &Path) -> String {
     if path == cwd {
         return ".".to_string();
     }
-    path.strip_prefix(&cwd).map_or_else(|_| path.to_string_lossy().to_string(), |p| p.to_string_lossy().to_string())
+    path.strip_prefix(&cwd).map_or_else(
+        |_| path.to_string_lossy().to_string(),
+        |p| p.to_string_lossy().to_string(),
+    )
 }
 
 /// Represents the result of executing a tool.
@@ -132,7 +135,9 @@ async fn list_files_handler(arg: &str) -> Result<ToolOutput> {
     }
     names.sort();
     if names.is_empty() {
-        Ok(ToolOutput::StatusOnly { status: format!("No files found in {display_path}") })
+        Ok(ToolOutput::StatusOnly {
+            status: format!("No files found in {display_path}"),
+        })
     } else {
         let content = names.join("\n");
         let status = format!("Listed {} files in {}", names.len(), display_path);
@@ -148,7 +153,9 @@ async fn read_file_handler(arg: &str) -> Result<ToolOutput> {
     let display_path = to_relative_path(path);
     let content = fs::read_to_string(path).await?;
     if content.is_empty() {
-        Ok(ToolOutput::StatusOnly { status: format!("File is empty: {display_path}") })
+        Ok(ToolOutput::StatusOnly {
+            status: format!("File is empty: {display_path}"),
+        })
     } else {
         let status = format!("Read file at {display_path}");
         Ok(ToolOutput::Text { content, status })
@@ -212,68 +219,66 @@ async fn apply_search_replace_handler(arg: &str) -> Result<ToolOutput> {
 }
 
 async fn run_command_handler(arg: &str) -> Result<ToolOutput> {
+    let timeout_duration = Duration::from_secs(300); // 5 minutes
+
     #[cfg(windows)]
-    let mut child = Command::new("cmd")
-        .args(&["/c", arg])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env("PYTHONUNBUFFERED", "1")
-        .spawn()?;
+    let mut cmd = Command::new("cmd");
     #[cfg(not(windows))]
-    let mut child = Command::new("sh")
-        .args(["-c", arg])
+    let mut cmd = Command::new("sh");
+
+    #[cfg(windows)]
+    let cmd = cmd.args(&["/c", arg]);
+    #[cfg(not(windows))]
+    let cmd = cmd.args(["-c", arg]);
+
+    let cmd = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .env("PYTHONUNBUFFERED", "1")
-        .spawn()?;
+        .stdin(Stdio::null())
+        .env("PYTHONUNBUFFERED", "1");
 
-    let stdout_handle = child.stdout.take().expect("failed to capture stdout");
-    let stderr_handle = child.stderr.take().expect("failed to capture stderr");
+    let output_future = cmd.output();
+    let output = tokio::time::timeout(timeout_duration, output_future)
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "Command timed out after {} seconds",
+                timeout_duration.as_secs()
+            )
+        })?
+        .map_err(|e| anyhow::anyhow!("Failed to execute command: {e}"))?;
 
-    let stdout_reader = BufReader::new(stdout_handle);
-    let stderr_reader = BufReader::new(stderr_handle);
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let exit_code = output.status.code().unwrap_or(-1);
 
-    // Spawn tasks to read and print stdout and stderr concurrently
-    let stdout_task = tokio::spawn(async move {
-        let mut lines = stdout_reader.lines();
-        let mut collected = Vec::new();
-        while let Ok(Some(line)) = lines.next_line().await {
+    // Print the output for visibility
+    if !stdout.is_empty() {
+        for line in stdout.lines() {
             println!("[stdout] {line}");
-            let _ = std::io::stdout().flush();
-            collected.push(line);
         }
-        collected
-    });
-
-    let stderr_task = tokio::spawn(async move {
-        let mut lines = stderr_reader.lines();
-        let mut collected = Vec::new();
-        while let Ok(Some(line)) = lines.next_line().await {
-            eprintln!("[stderr] {line}");
-            let _ = std::io::stderr().flush();
-            collected.push(line);
-        }
-        collected
-    });
-
-    let exit_status = child.wait().await?;
-    let stdout_lines_result = stdout_task.await.unwrap_or_default();
-    let stderr_lines_result = stderr_task.await.unwrap_or_default();
-
-    let exit_code = exit_status.code().unwrap_or(-1);
-    let mut result = String::new();
-    if !stdout_lines_result.is_empty() {
-        result.push_str("stdout:\n");
-        result.push_str(&stdout_lines_result.join("\n"));
+        let _ = std::io::stdout().flush();
     }
-    if !stderr_lines_result.is_empty() {
-        if !stdout_lines_result.is_empty() {
+    if !stderr.is_empty() {
+        for line in stderr.lines() {
+            eprintln!("[stderr] {line}");
+        }
+        let _ = std::io::stderr().flush();
+    }
+
+    let mut result = String::new();
+    if !stdout.is_empty() {
+        result.push_str("stdout:\n");
+        result.push_str(&stdout);
+    }
+    if !stderr.is_empty() {
+        if !stdout.is_empty() {
             result.push_str("\n\n");
         }
         result.push_str("stderr:\n");
-        result.push_str(&stderr_lines_result.join("\n"));
+        result.push_str(&stderr);
     }
-    if stdout_lines_result.is_empty() && stderr_lines_result.is_empty() {
+    if stdout.is_empty() && stderr.is_empty() {
         result.push_str("Command executed with no output");
     }
 
@@ -282,7 +287,10 @@ async fn run_command_handler(arg: &str) -> Result<ToolOutput> {
     } else {
         format!("Command failed (exit code: {exit_code})")
     };
-    Ok(ToolOutput::Text { content: result, status })
+    Ok(ToolOutput::Text {
+        content: result,
+        status,
+    })
 }
 
 async fn write_file_handler(arg: &str) -> Result<ToolOutput> {
@@ -291,7 +299,23 @@ async fn write_file_handler(arg: &str) -> Result<ToolOutput> {
         .next()
         .ok_or_else(|| anyhow!("Missing file path"))?
         .to_string();
-    let content: String = lines.collect::<Vec<&str>>().join("\n");
+
+    // Collect remaining lines into a vector
+    let remaining_lines: Vec<&str> = lines.collect();
+
+    // Find the first line that is exactly "--"
+    let delimiter_pos = remaining_lines.iter().position(|&line| line == "--");
+
+    let content = match delimiter_pos {
+        Some(pos) => {
+            // Content is lines before the delimiter (excluding the delimiter line)
+            remaining_lines[..pos].join("\n")
+        }
+        None => {
+            // No delimiter -> use all lines as content
+            remaining_lines.join("\n")
+        }
+    };
 
     let path_buf = PathBuf::from(&file_path);
     let display_path = to_relative_path(&path_buf);
@@ -473,8 +497,7 @@ async fn git_status_handler(arg: &str) -> Result<ToolOutput> {
 async fn git_diff_handler(arg: &str) -> Result<ToolOutput> {
     let args: Vec<&str> = arg.split_whitespace().collect();
     let working_dir = std::env::current_dir()?;
-    let git_root = find_git_root(&working_dir)
-        .ok_or_else(|| anyhow!("Not a git repository"))?;
+    let git_root = find_git_root(&working_dir).ok_or_else(|| anyhow!("Not a git repository"))?;
 
     let mut cmd = Command::new("git");
     cmd.arg("diff").current_dir(&git_root);
@@ -507,8 +530,7 @@ async fn git_diff_handler(arg: &str) -> Result<ToolOutput> {
 async fn git_log_handler(arg: &str) -> Result<ToolOutput> {
     let limit = arg.trim().parse::<usize>().unwrap_or(10);
     let working_dir = std::env::current_dir()?;
-    let git_root = find_git_root(&working_dir)
-        .ok_or_else(|| anyhow!("Not a git repository"))?;
+    let git_root = find_git_root(&working_dir).ok_or_else(|| anyhow!("Not a git repository"))?;
 
     let output = Command::new("git")
         .args([
@@ -528,7 +550,9 @@ async fn git_log_handler(arg: &str) -> Result<ToolOutput> {
     }
 
     if stdout.is_empty() {
-        Ok(ToolOutput::StatusOnly { status: format!("No commits found (limit {limit})") })
+        Ok(ToolOutput::StatusOnly {
+            status: format!("No commits found (limit {limit})"),
+        })
     } else {
         let status = format!("Showed last {} commits", stdout.lines().count());
         Ok(ToolOutput::Text {
@@ -540,18 +564,18 @@ async fn git_log_handler(arg: &str) -> Result<ToolOutput> {
 
 async fn git_commit_handler(arg: &str) -> Result<ToolOutput> {
     let raw_message = arg.trim();
-    let message = if raw_message.starts_with('"') && raw_message.ends_with('"') && raw_message.len() >= 2 {
-        &raw_message[1..raw_message.len()-1]
-    } else {
-        raw_message
-    };
+    let message =
+        if raw_message.starts_with('"') && raw_message.ends_with('"') && raw_message.len() >= 2 {
+            &raw_message[1..raw_message.len() - 1]
+        } else {
+            raw_message
+        };
     if message.is_empty() {
         anyhow::bail!("Commit message cannot be empty");
     }
 
     let working_dir = std::env::current_dir()?;
-    let git_root = find_git_root(&working_dir)
-        .ok_or_else(|| anyhow!("Not a git repository"))?;
+    let git_root = find_git_root(&working_dir).ok_or_else(|| anyhow!("Not a git repository"))?;
 
     let output = Command::new("git")
         .args(["commit", "-m", message])
@@ -579,8 +603,7 @@ async fn git_add_handler(arg: &str) -> Result<ToolOutput> {
     }
 
     let working_dir = std::env::current_dir()?;
-    let git_root = find_git_root(&working_dir)
-        .ok_or_else(|| anyhow!("Not a git repository"))?;
+    let git_root = find_git_root(&working_dir).ok_or_else(|| anyhow!("Not a git repository"))?;
 
     let output = Command::new("git")
         .args(["add", pathspec])
@@ -604,7 +627,9 @@ async fn git_add_handler(arg: &str) -> Result<ToolOutput> {
 
 async fn search_codebase_handler(arg: &str) -> Result<ToolOutput> {
     let parts: Vec<&str> = arg.trim().splitn(2, ' ').collect();
-    let pattern = parts.first().ok_or_else(|| anyhow!("Search pattern required"))?;
+    let pattern = parts
+        .first()
+        .ok_or_else(|| anyhow!("Search pattern required"))?;
     let mut path = ".";
     let mut file_type = None;
     let mut max_results = 50;
@@ -695,19 +720,22 @@ fn detect_test_command(project_root: &Path) -> Option<(&'static str, Vec<&'stati
 
 async fn run_tests_handler(arg: &str) -> Result<ToolOutput> {
     let working_dir = std::env::current_dir()?;
-    let git_root = find_git_root(&working_dir)
-        .unwrap_or_else(|| working_dir.clone());
+    let git_root = find_git_root(&working_dir).unwrap_or_else(|| working_dir.clone());
 
     // Check for custom command in args
     let custom_cmd = arg.trim();
     let (cmd_name, cmd_args) = if custom_cmd.is_empty() {
         // Auto-detect
-        detect_test_command(&git_root)
-            .ok_or_else(|| anyhow!("Could not detect project type. Specify test command manually."))?
+        detect_test_command(&git_root).ok_or_else(|| {
+            anyhow!("Could not detect project type. Specify test command manually.")
+        })?
     } else {
         // Parse custom command
         let parts: Vec<&str> = custom_cmd.split_whitespace().collect();
-        (parts.first().copied().unwrap_or("cargo"), parts[1..].to_vec())
+        (
+            parts.first().copied().unwrap_or("cargo"),
+            parts[1..].to_vec(),
+        )
     };
 
     let output = Command::new(cmd_name)
@@ -735,7 +763,11 @@ async fn run_tests_handler(arg: &str) -> Result<ToolOutput> {
 
     if result.is_empty() {
         let status = if exit_code == 0 {
-            format!("Tests passed with no output ({} cmd: {})", cmd_name, cmd_args.join(" "))
+            format!(
+                "Tests passed with no output ({} cmd: {})",
+                cmd_name,
+                cmd_args.join(" ")
+            )
         } else {
             format!("Tests failed with no output (exit code: {exit_code})")
         };
@@ -761,8 +793,7 @@ async fn get_project_context_handler(_arg: &str) -> Result<ToolOutput> {
     use std::fmt::Write;
 
     let working_dir = std::env::current_dir()?;
-    let git_root = find_git_root(&working_dir)
-        .unwrap_or_else(|| working_dir.clone());
+    let git_root = find_git_root(&working_dir).unwrap_or_else(|| working_dir.clone());
 
     let display_git_root = to_relative_path(&git_root);
 
@@ -779,8 +810,7 @@ async fn get_project_context_handler(_arg: &str) -> Result<ToolOutput> {
         "Go"
     } else if git_root.join("pom.xml").exists() {
         "Java (Maven)"
-    } else if git_root.join("build.gradle").exists() || git_root.join("build.gradle.kts").exists()
-    {
+    } else if git_root.join("build.gradle").exists() || git_root.join("build.gradle.kts").exists() {
         "Java (Gradle)"
     } else {
         "Unknown"
@@ -859,7 +889,10 @@ async fn get_project_context_handler(_arg: &str) -> Result<ToolOutput> {
     }
 
     let status = format!("Project context for {display_git_root}");
-    Ok(ToolOutput::Text { content: context, status })
+    Ok(ToolOutput::Text {
+        content: context,
+        status,
+    })
 }
 
 // ============================================================================
@@ -876,10 +909,8 @@ struct BrowserState {
 impl BrowserState {
     async fn new() -> Result<Self> {
         let builder = BrowserConfig::builder();
-        let (browser, handler) = Browser::launch(
-            builder.build().map_err(anyhow::Error::msg)?,
-        )
-        .await?;
+        let (browser, handler) =
+            Browser::launch(builder.build().map_err(anyhow::Error::msg)?).await?;
         let handler_task = tokio::spawn(handler.for_each(|_| async {}));
         let page = browser.new_page("about:blank").await?;
         Ok(Self {
@@ -999,7 +1030,9 @@ fn browser_get_html_handler(_arg: &str) -> ToolFuture<'_> {
         let state = guard.as_mut().unwrap();
         let content = state.current_page().content().await?;
         if content.is_empty() {
-            Ok(ToolOutput::StatusOnly { status: "Page HTML is empty".to_string() })
+            Ok(ToolOutput::StatusOnly {
+                status: "Page HTML is empty".to_string(),
+            })
         } else {
             let status = format!("Retrieved HTML from current page ({} bytes)", content.len());
             Ok(ToolOutput::Text { content, status })
@@ -1250,7 +1283,7 @@ static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
     m.insert(
         "write_file",
         Tool {
-            description: "write_file <file_path> : writes the provided content to the file, creating any necessary parent directories. If the file exists, it is overwritten. The content should follow the file path on subsequent lines.",
+            description: "write_file <file_path> : writes the provided content to the file, creating any necessary parent directories. If the file exists, it is overwritten. The content should follow the file path on subsequent lines. To add commentary without writing it to the file, place the commentary after a line containing only '--'. Everything before that line (excluding the '--' line) is written; everything after is ignored.",
             handler: Box::new(|s| Box::pin(write_file_handler(s))),
         },
     );

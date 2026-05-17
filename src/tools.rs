@@ -116,21 +116,11 @@ async fn list_files_handler(arg: &str) -> Result<ToolOutput> {
         anyhow::bail!("Not a directory: {display_path}");
     }
 
-    // Find git root for .gitignore checking
-    let git_root = find_git_root(path).unwrap_or_else(|| path.to_path_buf());
-
     let mut entries = fs::read_dir(path).await?;
     let mut names = Vec::new();
     while let Some(entry) = entries.next_entry().await? {
         if let Some(name) = entry.file_name().to_str() {
-            // Skip hidden files/directories (starting with .)
-            if name.starts_with('.') {
-                continue;
-            }
-            // Skip gitignored files
-            if is_gitignored(&entry.path(), &git_root).unwrap_or(false) {
-                continue;
-            }
+            // Include all files, including hidden and gitignored ones
             names.push(name.to_string());
         }
     }

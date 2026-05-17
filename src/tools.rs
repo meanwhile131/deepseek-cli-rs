@@ -163,13 +163,11 @@ async fn read_file_handler(arg: &str) -> Result<ToolOutput> {
     // Determine line range (1-indexed offset)
     let start_idx = match offset_line {
         Some(offset) if offset > 0 => offset - 1,
-        Some(_) => 0,
-        None => 0,
+        Some(_) | None => 0,
     };
     let end_idx = match limit {
         Some(lim) if lim > 0 => (start_idx + lim).min(total_lines),
-        Some(_) => total_lines,
-        None => total_lines,
+        Some(_) | None => total_lines,
     };
     
     if start_idx >= total_lines {

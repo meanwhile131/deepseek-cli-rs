@@ -886,7 +886,10 @@ async fn get_project_context_handler(_arg: &str) -> Result<ToolOutput> {
     };
     writeln!(context, "Project Type: {project_type}").unwrap();
 
-    writeln!(context, "Project Root: {display_git_root}").unwrap();
+    let root_name = git_root.file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| display_git_root.clone());
+    writeln!(context, "Project Root: {root_name}").unwrap();
 
     // Git info
     let git_output = Command::new("git")
@@ -957,7 +960,7 @@ async fn get_project_context_handler(_arg: &str) -> Result<ToolOutput> {
         }
     }
 
-    let status = format!("Project context for {display_git_root}");
+    let status = format!("Project context for {root_name}");
     Ok(ToolOutput::Text {
         content: context,
         status,

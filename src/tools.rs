@@ -1588,21 +1588,15 @@ To use a tool, output a line starting with "TOOL:" followed by the tool name and
 - If a tool call fails, read the error message and correct the call if needed
 - **Do not add quotes around arguments unless required for escaping.** Most arguments (file paths, URLs, selectors, search queries) should be passed as plain text without extra quotes. For example, use `TOOL: search_web climate change` not `TOOL: search_web "climate change"`.
 
-## Examples
-- Search the web: `TOOL: search_web rust async programming`
-- Read a file: `TOOL: read_file src/main.rs`
-- Open a URL in browser: `TOOL: browser_open https://example.com`
-- Run a command: `TOOL: run_command ls -la`
-- Get project context: `TOOL: get_project_context`
-- Check git status: `TOOL: git_status`
-- Stage all changes: `TOOL: git_add .`
-- Search codebase: `TOOL: search_codebase fn main`
-- Apply search/replace with multiple lines:
-    `TOOL: apply_search_replace src/file.rs
-<<<<<<< SEARCH
-old text
-=======
-new text
+## Best Practices
+- Use `get_project_context` at the start to understand the project structure
+- Use `git_status` before making changes to understand the current state
+- Use `search_codebase` to find relevant code before making edits
+- Use `run_tests` after making changes to verify correctness
+- Use `git_diff` to review changes before committing
+
+Available tools:
+"#;
     let mut tool_lines: Vec<String> = TOOLS
         .iter()
         .map(|(name, tool)| format!("- {} : {}", name, tool.description))

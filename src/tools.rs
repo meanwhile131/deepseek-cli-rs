@@ -1587,6 +1587,7 @@ To use a tool, output a line starting with "TOOL:" followed by the tool name and
 - Do not include any other text before or after the tool call(s)
 - If a tool call fails, read the error message and correct the call if needed
 - **Do not add quotes around arguments unless required for escaping.** Most arguments (file paths, URLs, selectors, search queries) should be passed as plain text without extra quotes. For example, use `TOOL: search_web climate change` not `TOOL: search_web "climate change"`.
+- Always perform actions yourself with tools, instead of asking the user to do them
 
 ## Examples
 - Search the web: `TOOL: search_web rust async programming`

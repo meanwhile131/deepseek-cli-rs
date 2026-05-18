@@ -16,8 +16,7 @@ async fn test_read_file_empty_no_args() -> Result<()> {
         ToolOutput::StatusOnly { status } => {
             assert!(
                 status.contains("empty") || status.contains("File is empty"),
-                "Expected empty file status, got: {}",
-                status
+                "Expected empty file status, got: {status}"
             );
             assert!(status.contains(path_str));
         }
@@ -25,7 +24,7 @@ async fn test_read_file_empty_no_args() -> Result<()> {
             assert_eq!(content, "");
             assert!(status.contains(path_str));
         }
-        other => panic!("Expected StatusOnly or Text, got {:?}", other),
+        other => panic!("Expected StatusOnly or Text, got {other:?}"),
     }
     Ok(())
 }
@@ -38,14 +37,13 @@ async fn test_read_file_empty_with_args() -> Result<()> {
     fs::write(&file_path, b"")?;
     let path_str = file_path.to_str().unwrap();
 
-    // Test with explicit offset and limit (should be handled gracefully)
-    let result = execute_tool("read_file", &format!("{} 1 10", path_str)).await?;
+    // Test with explicit start_line and end_line (should be handled gracefully)
+    let result = execute_tool("read_file", &format!("{path_str} 1 10")).await?;
     match result {
         ToolOutput::StatusOnly { status } => {
             assert!(
                 status.contains("empty") || status.contains("File is empty"),
-                "Expected empty file status: {}",
-                status
+                "Expected empty file status: {status}"
             );
             assert!(status.contains(path_str));
         }
@@ -53,7 +51,7 @@ async fn test_read_file_empty_with_args() -> Result<()> {
             assert_eq!(content, "");
             assert!(status.contains(path_str));
         }
-        other => panic!("Expected StatusOnly or Text, got {:?}", other),
+        other => panic!("Expected StatusOnly or Text, got {other:?}"),
     }
     Ok(())
 }

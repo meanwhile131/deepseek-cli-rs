@@ -11,8 +11,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use tokio::fs;
-use tokio::process::Command;
 use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::Command;
 
 use std::io::Write;
 use std::process::Stdio;
@@ -137,61 +137,90 @@ async fn list_files_handler(arg: &str) -> Result<ToolOutput> {
 }
 
 async fn read_file_handler(arg: &str) -> Result<ToolOutput> {
-    // Parse arguments: path [offset] [limit]
+    // Parse arguments: path [start_line] [end_line]
     let parts: Vec<&str> = arg.split_whitespace().collect();
     if parts.is_empty() {
         anyhow::bail!("read_file: missing file path");
     }
     let path_str = parts[0];
-    let mut offset_line: Option<usize> = None;
-    let mut limit: Option<usize> = None;
+    let mut start_line: Option<usize> = None;
+    let mut end_line: Option<usize> = None;
     if parts.len() > 1 {
-        offset_line = parts[1].parse().ok();
+        start_line = parts[1].parse().ok();
     }
     if parts.len() > 2 {
-        limit = parts[2].parse().ok();
+        end_line = parts[2].parse().ok();
     }
-    
+
     let path = Path::new(path_str);
     let display_path = to_relative_path(path);
     let full_content = fs::read_to_string(path).await?;
-    
+
     // Split into lines
     let lines: Vec<&str> = full_content.lines().collect();
     let total_lines = lines.len();
-    
-    // Determine line range (1-indexed offset)
-    let start_idx = match offset_line {
-        Some(offset) if offset > 0 => offset - 1,
-        Some(_) | None => 0,
-    };
-    let end_idx = match limit {
-        Some(lim) if lim > 0 => (start_idx + lim).min(total_lines),
-        Some(_) | None => total_lines,
-    };
-    
-    // Handle empty file: ignore offset/limit and return empty content
+
+    // Handle empty file: ignore line arguments and return empty content
     if total_lines == 0 {
         return Ok(ToolOutput::StatusOnly {
             status: format!("File is empty: {display_path}"),
         });
     }
-    
+
+    // Determine line range (1-indexed inclusive)
+    let (start_idx, end_idx) = match (start_line, end_line) {
+        (Some(s), Some(e)) => {
+            if s == 0 || e == 0 {
+                anyhow::bail!("Line numbers must be positive (1-indexed)");
+            }
+            if s > e {
+                anyhow::bail!("Start line {s} is greater than end line {e}");
+            }
+            if s > total_lines {
+                anyhow::bail!("Start line {s} exceeds total lines {total_lines}");
+            }
+            let start = s - 1;
+            let end = e.min(total_lines);
+            (start, end)
+        }
+        (Some(s), None) => {
+            if s == 0 {
+                anyhow::bail!("Start line must be positive (1-indexed)");
+            }
+            if s > total_lines {
+                anyhow::bail!("Start line {s} exceeds total lines {total_lines}");
+            }
+            (s - 1, total_lines)
+        }
+        (None, Some(_e)) => {
+            anyhow::bail!("End line provided without start line");
+        }
+        (None, None) => (0, total_lines),
+    };
+
     if start_idx >= total_lines {
-        anyhow::bail!("Offset line {} exceeds total lines {}", offset_line.unwrap_or(0), total_lines);
+        // Already handled above, but safety
+        anyhow::bail!("Start line out of range");
     }
-    
+
     let selected_lines = &lines[start_idx..end_idx];
     let content = selected_lines.join("\n");
-    
+
     if content.is_empty() {
         Ok(ToolOutput::StatusOnly {
-            status: format!("No lines selected (empty range) in {display_path} (lines {}-{})", 
-                start_idx + 1, end_idx),
+            status: format!(
+                "No lines selected (empty range) in {display_path} (lines {}-{})",
+                start_idx + 1,
+                end_idx
+            ),
         })
     } else {
-        let status = format!("Read file at {display_path} (lines {}-{} of {})", 
-            start_idx + 1, end_idx, total_lines);
+        let status = format!(
+            "Read file at {display_path} (lines {}-{} of {})",
+            start_idx + 1,
+            end_idx,
+            total_lines
+        );
         Ok(ToolOutput::Text { content, status })
     }
 }
@@ -272,6 +301,21 @@ async fn run_command_handler(arg: &str) -> Result<ToolOutput> {
         .env("PYTHONUNBUFFERED", "1")
         .spawn()?;
 
+    let (stdout_lines, stderr_lines, exit_code) = read_command_output(&mut child, timeout_duration).await?;
+
+    let result = format_command_output(&stdout_lines, &stderr_lines);
+    let status = if exit_code == 0 {
+        "Command succeeded (exit code: 0)".to_string()
+    } else {
+        format!("Command failed (exit code: {exit_code})")
+    };
+    Ok(ToolOutput::Text { content: result, status })
+}
+
+async fn read_command_output(
+    child: &mut tokio::process::Child,
+    timeout: Duration,
+) -> Result<(Vec<String>, Vec<String>, i32)> {
     let stdout = child.stdout.take().expect("Failed to capture stdout");
     let stderr = child.stderr.take().expect("Failed to capture stderr");
 
@@ -297,9 +341,7 @@ async fn run_command_handler(arg: &str) -> Result<ToolOutput> {
                             let _ = std::io::stdout().flush();
                             stdout_lines.push(l);
                         }
-                        Ok(None) => {
-                            stdout_done = true;
-                        }
+                        Ok(None) => { stdout_done = true; }
                         Err(e) => return Err(anyhow!("Error reading stdout: {e}")),
                     }
                 }
@@ -310,9 +352,7 @@ async fn run_command_handler(arg: &str) -> Result<ToolOutput> {
                             let _ = std::io::stderr().flush();
                             stderr_lines.push(l);
                         }
-                        Ok(None) => {
-                            stderr_done = true;
-                        }
+                        Ok(None) => { stderr_done = true; }
                         Err(e) => return Err(anyhow!("Error reading stderr: {e}")),
                     }
                 }
@@ -326,12 +366,15 @@ async fn run_command_handler(arg: &str) -> Result<ToolOutput> {
         Ok::<_, anyhow::Error>(())
     };
 
-    tokio::time::timeout(timeout_duration, read_loop)
+    tokio::time::timeout(timeout, read_loop)
         .await
-        .map_err(|_| anyhow::anyhow!("Command timed out after {} seconds", timeout_duration.as_secs()))?
+        .map_err(|_| anyhow::anyhow!("Command timed out after {} seconds", timeout.as_secs()))?
         .map_err(|e| anyhow::anyhow!("Command execution failed: {e}"))?;
 
-    // Build result string from captured lines
+    Ok((stdout_lines, stderr_lines, exit_code))
+}
+
+fn format_command_output(stdout_lines: &[String], stderr_lines: &[String]) -> String {
     let stdout_str = stdout_lines.join("\n");
     let stderr_str = stderr_lines.join("\n");
 
@@ -350,16 +393,7 @@ async fn run_command_handler(arg: &str) -> Result<ToolOutput> {
     if stdout_str.is_empty() && stderr_str.is_empty() {
         result.push_str("Command executed with no output");
     }
-
-    let status = if exit_code == 0 {
-        "Command succeeded (exit code: 0)".to_string()
-    } else {
-        format!("Command failed (exit code: {exit_code})")
-    };
-    Ok(ToolOutput::Text {
-        content: result,
-        status,
-    })
+    result
 }
 
 async fn write_file_handler(arg: &str) -> Result<ToolOutput> {
@@ -886,9 +920,8 @@ async fn get_project_context_handler(_arg: &str) -> Result<ToolOutput> {
     };
     writeln!(context, "Project Type: {project_type}").unwrap();
 
-    let root_name = git_root.file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_else(|| display_git_root.clone());
+    let root_name = git_root
+        .file_name().map_or_else(|| display_git_root.clone(), |name| name.to_string_lossy().to_string());
     writeln!(context, "Project Root: {root_name}").unwrap();
 
     // Git info
@@ -1327,7 +1360,7 @@ static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
     m.insert(
         "read_file",
         Tool {
-            description: "read_file <file_path> [offset] [limit] : outputs the text contents of a file. Offset is 1-indexed line number to start from (default 1). Limit is number of lines to read (default all).",
+            description: "read_file <file_path> [start_line] [end_line] : outputs the text contents of a file. Both start_line and end_line are 1-indexed inclusive. If only start_line is given, reads from that line to the end. If neither given, reads entire file.",
             handler: Box::new(|s| Box::pin(read_file_handler(s))),
         },
     );

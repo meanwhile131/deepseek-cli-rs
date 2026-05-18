@@ -86,7 +86,7 @@ where
     S: Stream<Item = Result<StreamChunk>>,
 {
     let mut delay = tokio::time::Duration::from_secs(5);
-    let max_delay = tokio::time::Duration::from_secs(60);
+    let max_delay = tokio::time::Duration::from_mins(1);
     let mut attempt = 0;
     loop {
         let stream = stream_factory().await?;

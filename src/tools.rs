@@ -1394,7 +1394,7 @@ static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
     m.insert(
         "write_file",
         Tool {
-            description: "write_file <file_path> : writes the provided content to the file, creating any necessary parent directories. If the file exists, it is overwritten. The content should follow the file path on subsequent lines. To add commentary without writing it to the file, place the commentary after a line containing only '--'. Everything before that line (excluding the '--' line) is written; everything after is ignored.",
+            description: "write_file <file_path> : writes the provided content to the file, creating any necessary parent directories. If the file exists, it is overwritten. The content should follow the file path on subsequent lines. To add commentary without writing it to the file, place the commentary after a line containing only '--'. Everything before that line (excluding the '--' line) is written; everything after is ignored.\n\nNote: If you need to write a line that starts with the literal text 'TOOL:', precede that line with a backslash ('\\') at the beginning of the line (after any leading spaces). The backslash will be removed, and the line will be written as 'TOOL:...' without being interpreted as a tool call.",
             handler: Box::new(|s| Box::pin(write_file_handler(s))),
         },
     );

@@ -261,6 +261,7 @@ fn parse_tool_invocations(content: &str) -> Vec<(String, String)> {
     while i < lines.len() {
         // Allow leading whitespace before TOOL:
         let trimmed_line = lines[i].trim();
+
         if trimmed_line.starts_with("TOOL:") {
             // Extract the part after "TOOL:" (case-insensitive? but we'll keep exact)
             let after_tool = trimmed_line.strip_prefix("TOOL:").unwrap_or("").trim();
@@ -271,8 +272,22 @@ fn parse_tool_invocations(content: &str) -> Vec<(String, String)> {
             let mut body_lines = Vec::new();
             i += 1;
             // Collect lines until we find another line that starts with "TOOL:" (ignoring leading whitespace)
-            while i < lines.len() && !lines[i].trim().starts_with("TOOL:") {
-                body_lines.push(lines[i]);
+            // or an escaped \TOOL: line (which is treated as literal content, not a tool separator)
+            while i < lines.len() {
+                let next_trimmed = lines[i].trim();
+                if next_trimmed.starts_with("TOOL:") {
+                    break;
+                }
+                // Escaped lines are literal, so we include them in the body (with backslash removed)
+                if next_trimmed.starts_with("\\TOOL:") {
+                    let leading_spaces = lines[i].len() - next_trimmed.len();
+                    let unescaped = next_trimmed.strip_prefix("\\").unwrap_or(next_trimmed);
+                    let new_line = " ".repeat(leading_spaces) + unescaped;
+                    body_lines.push(new_line);
+                    i += 1;
+                    continue;
+                }
+                body_lines.push(lines[i].to_string());
                 i += 1;
             }
             let body = body_lines.join("\n");

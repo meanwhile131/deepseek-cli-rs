@@ -282,7 +282,7 @@ async fn apply_search_replace_handler(arg: &str) -> Result<ToolOutput> {
 }
 
 async fn run_command_handler(arg: &str) -> Result<ToolOutput> {
-    let timeout_duration = Duration::from_secs(300); // 5 minutes
+    let timeout_duration = Duration::from_mins(5); // 5 minutes
 
     #[cfg(windows)]
     let mut cmd = Command::new("cmd");

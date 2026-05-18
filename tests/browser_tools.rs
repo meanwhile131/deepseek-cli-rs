@@ -24,12 +24,18 @@ async fn open_and_verify_title(data_url: &str) -> Result<()> {
     let ToolOutput::StatusOnly { status } = &res else {
         panic!("Expected StatusOnly, got {res:?}")
     };
-    assert!(status.contains("Opened URL"), "browser_open failed: {res:?}");
+    assert!(
+        status.contains("Opened URL"),
+        "browser_open failed: {res:?}"
+    );
 
     sleep(Duration::from_secs(2)).await;
 
     let title = execute_tool("browser_evaluate", "document.title").await?;
-    let ToolOutput::StatusOnly { status: eval_status } = &title else {
+    let ToolOutput::StatusOnly {
+        status: eval_status,
+    } = &title
+    else {
         panic!("Expected StatusOnly, got {title:?}")
     };
     assert!(
@@ -44,7 +50,10 @@ async fn click_button_and_verify() -> Result<()> {
     let ToolOutput::StatusOnly { status } = &res else {
         panic!("Expected StatusOnly, got {res:?}")
     };
-    assert!(status.contains("Clicked element"), "browser_click failed: {res:?}");
+    assert!(
+        status.contains("Clicked element"),
+        "browser_click failed: {res:?}"
+    );
 
     sleep(Duration::from_millis(500)).await;
 
@@ -53,7 +62,10 @@ async fn click_button_and_verify() -> Result<()> {
         "document.getElementById('status').innerText",
     )
     .await?;
-    let ToolOutput::StatusOnly { status: eval_status } = &eval_res else {
+    let ToolOutput::StatusOnly {
+        status: eval_status,
+    } = &eval_res
+    else {
         panic!("Expected StatusOnly, got {eval_res:?}")
     };
     assert!(
@@ -69,33 +81,56 @@ async fn test_tab_management() -> Result<()> {
     let ToolOutput::StatusOnly { status } = &res else {
         panic!("Expected StatusOnly, got {res:?}")
     };
-    assert!(status.contains("Opened new tab 2"), "browser_new_tab failed: {res:?}");
+    assert!(
+        status.contains("Opened new tab 2"),
+        "browser_new_tab failed: {res:?}"
+    );
 
     // List tabs (should have 2)
     let tabs = execute_tool("browser_list_tabs", "").await?;
-    let ToolOutput::Text { content: tabs_content, .. } = &tabs else {
+    let ToolOutput::Text {
+        content: tabs_content,
+        ..
+    } = &tabs
+    else {
         panic!("Expected Text, got {tabs:?}")
     };
-    assert!(tabs_content.contains("1."), "browser_list_tabs missing first tab");
-    assert!(tabs_content.contains("2."), "browser_list_tabs missing second tab");
+    assert!(
+        tabs_content.contains("1."),
+        "browser_list_tabs missing first tab"
+    );
+    assert!(
+        tabs_content.contains("2."),
+        "browser_list_tabs missing second tab"
+    );
 
     // Switch back to tab 1
     let res = execute_tool("browser_switch_tab", "1").await?;
     let ToolOutput::StatusOnly { status } = &res else {
         panic!("Expected StatusOnly, got {res:?}")
     };
-    assert!(status.contains("Switched to tab 1"), "browser_switch_tab failed: {res:?}");
+    assert!(
+        status.contains("Switched to tab 1"),
+        "browser_switch_tab failed: {res:?}"
+    );
 
     // Close tab 2
     let res = execute_tool("browser_close_tab", "2").await?;
     let ToolOutput::StatusOnly { status } = &res else {
         panic!("Expected StatusOnly, got {res:?}")
     };
-    assert!(status.contains("Closed tab 2"), "browser_close_tab failed: {res:?}");
+    assert!(
+        status.contains("Closed tab 2"),
+        "browser_close_tab failed: {res:?}"
+    );
 
     // List tabs again (should only have one)
     let tabs = execute_tool("browser_list_tabs", "").await?;
-    let ToolOutput::Text { content: tabs_content, .. } = &tabs else {
+    let ToolOutput::Text {
+        content: tabs_content,
+        ..
+    } = &tabs
+    else {
         panic!("Expected Text, got {tabs:?}")
     };
     assert_eq!(

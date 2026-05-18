@@ -301,7 +301,8 @@ async fn run_command_handler(arg: &str) -> Result<ToolOutput> {
         .env("PYTHONUNBUFFERED", "1")
         .spawn()?;
 
-    let (stdout_lines, stderr_lines, exit_code) = read_command_output(&mut child, timeout_duration).await?;
+    let (stdout_lines, stderr_lines, exit_code) =
+        read_command_output(&mut child, timeout_duration).await?;
 
     let result = format_command_output(&stdout_lines, &stderr_lines);
     let status = if exit_code == 0 {
@@ -309,7 +310,10 @@ async fn run_command_handler(arg: &str) -> Result<ToolOutput> {
     } else {
         format!("Command failed (exit code: {exit_code})")
     };
-    Ok(ToolOutput::Text { content: result, status })
+    Ok(ToolOutput::Text {
+        content: result,
+        status,
+    })
 }
 
 async fn read_command_output(
@@ -920,8 +924,10 @@ async fn get_project_context_handler(_arg: &str) -> Result<ToolOutput> {
     };
     writeln!(context, "Project Type: {project_type}").unwrap();
 
-    let root_name = git_root
-        .file_name().map_or_else(|| display_git_root.clone(), |name| name.to_string_lossy().to_string());
+    let root_name = git_root.file_name().map_or_else(
+        || display_git_root.clone(),
+        |name| name.to_string_lossy().to_string(),
+    );
     writeln!(context, "Project Root: {root_name}").unwrap();
 
     // Git info

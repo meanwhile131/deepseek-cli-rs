@@ -896,10 +896,22 @@ async fn run_tests_handler(arg: &str) -> Result<ToolOutput> {
 // Project Context Tool
 // ============================================================================
 
-async fn get_project_context_handler(_arg: &str) -> Result<ToolOutput> {
+async fn get_project_context_handler(arg: &str) -> Result<ToolOutput> {
     use std::fmt::Write;
 
-    let working_dir = std::env::current_dir()?;
+    let arg_trimmed = arg.trim();
+    let working_dir = if arg_trimmed.is_empty() {
+        std::env::current_dir()?
+    } else {
+        let path = Path::new(arg_trimmed);
+        if !path.exists() {
+            anyhow::bail!("Path does not exist: {}", arg_trimmed);
+        }
+        if !path.is_dir() {
+            anyhow::bail!("Path is not a directory: {}", arg_trimmed);
+        }
+        path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    };
     let git_root = find_git_root(&working_dir).unwrap_or_else(|| working_dir.clone());
 
     let display_git_root = to_relative_path(&git_root);
@@ -1566,7 +1578,7 @@ static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
     m.insert(
         "get_project_context",
         Tool {
-            description: "get_project_context : Returns project type, git branch, directory structure, and key files.",
+            description: "get_project_context [path] : Returns project type, git branch, directory structure, and key files for the specified directory (defaults to current directory).",
             handler: Box::new(|s| Box::pin(get_project_context_handler(s))),
         },
     );

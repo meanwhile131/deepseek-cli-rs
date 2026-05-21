@@ -195,7 +195,7 @@ async fn read_file_handler(arg: &str) -> Result<ToolOutput> {
         (None, Some(_e)) => {
             anyhow::bail!("End line provided without start line");
         }
-        (None, None) => (0, total_lines),
+        (None, None) => (0, std::cmp::min(1000, total_lines)),
     };
 
     if start_idx >= total_lines {
@@ -1378,7 +1378,7 @@ static TOOLS: LazyLock<HashMap<&'static str, Tool>> = LazyLock::new(|| {
     m.insert(
         "read_file",
         Tool {
-            description: "read_file <file_path> [start_line] [end_line] : outputs the text contents of a file. Both start_line and end_line are 1-indexed inclusive. If only start_line is given, reads from that line to the end. If neither given, reads entire file.",
+            description: "read_file <file_path> [start_line] [end_line] : outputs the text contents of a file. Both start_line and end_line are 1-indexed inclusive. If only start_line is given, reads from that line to the end. If neither given, reads first 1000 lines (or entire file if shorter).",
             handler: Box::new(|s| Box::pin(read_file_handler(s))),
         },
     );

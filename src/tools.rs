@@ -896,97 +896,69 @@ async fn run_tests_handler(arg: &str) -> Result<ToolOutput> {
 // Project Context Tool
 // ============================================================================
 
-async fn get_project_context_handler(arg: &str) -> Result<ToolOutput> {
-    use std::fmt::Write;
-
-    let arg_trimmed = arg.trim();
-    let working_dir = if arg_trimmed.is_empty() {
-        std::env::current_dir()?
-    } else {
-        let path = Path::new(arg_trimmed);
-        if !path.exists() {
-            anyhow::bail!("Path does not exist: {}", arg_trimmed);
-        }
-        if !path.is_dir() {
-            anyhow::bail!("Path is not a directory: {}", arg_trimmed);
-        }
-        path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
-    };
-    let git_root = find_git_root(&working_dir).unwrap_or_else(|| working_dir.clone());
-
-    let display_git_root = to_relative_path(&git_root);
-
-    let mut context = String::new();
-
-    // Project type detection
-    let project_type = if git_root.join("Cargo.toml").exists() {
-        "Rust (Cargo)"
+fn detect_project_type(git_root: &Path) -> String {
+    if git_root.join("Cargo.toml").exists() {
+        "Rust (Cargo)".to_string()
     } else if git_root.join("package.json").exists() {
-        "Node.js (npm)"
+        "Node.js (npm)".to_string()
     } else if git_root.join("pyproject.toml").exists() || git_root.join("setup.py").exists() {
-        "Python"
+        "Python".to_string()
     } else if git_root.join("go.mod").exists() {
-        "Go"
+        "Go".to_string()
     } else if git_root.join("pom.xml").exists() {
-        "Java (Maven)"
+        "Java (Maven)".to_string()
     } else if git_root.join("build.gradle").exists() || git_root.join("build.gradle.kts").exists() {
-        "Java (Gradle)"
+        "Java (Gradle)".to_string()
     } else {
-        "Unknown"
-    };
-    writeln!(context, "Project Type: {project_type}").unwrap();
+        "Unknown".to_string()
+    }
+}
 
-    let root_name = git_root.file_name().map_or_else(
-        || display_git_root.clone(),
-        |name| name.to_string_lossy().to_string(),
-    );
-    writeln!(context, "Project Root: {root_name}").unwrap();
-
-    // Git info
-    let git_output = Command::new("git")
+async fn get_git_branch(git_root: &Path) -> Option<String> {
+    let output = Command::new("git")
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(&git_root)
+        .current_dir(git_root)
         .output()
-        .await;
-    if let Ok(output) = git_output {
-        let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !branch.is_empty() {
-            writeln!(context, "Git Branch: {branch}").unwrap();
+        .await
+        .ok()?;
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if branch.is_empty() { None } else { Some(branch) }
+}
+
+async fn list_top_level_structure(git_root: &Path) -> String {
+    let mut result = String::new();
+    let mut entries = match fs::read_dir(git_root).await {
+        Ok(e) => e,
+        Err(_) => return result,
+    };
+    let mut dirs = Vec::new();
+    let mut files = Vec::new();
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        if is_gitignored(&entry.path(), git_root).unwrap_or(false) {
+            continue;
+        }
+        if entry.path().is_dir() {
+            dirs.push(name);
+        } else {
+            files.push(name);
         }
     }
-
-    // Directory structure (top level)
-    context.push_str("\nTop-level structure:\n");
-    if let Ok(mut entries) = fs::read_dir(&git_root).await {
-        let mut dirs = Vec::new();
-        let mut files = Vec::new();
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with('.') {
-                continue; // Skip hidden files/dirs
-            }
-            // Skip gitignored files
-            if is_gitignored(&entry.path(), &git_root).unwrap_or(false) {
-                continue;
-            }
-            let is_dir = entry.path().is_dir();
-            if is_dir {
-                dirs.push(name);
-            } else {
-                files.push(name);
-            }
-        }
-        dirs.sort();
-        files.sort();
-        for dir in dirs {
-            writeln!(context, "  📁 {dir}").unwrap();
-        }
-        for file in files {
-            writeln!(context, "  📄 {file}").unwrap();
-        }
+    dirs.sort();
+    files.sort();
+    for dir in dirs {
+        writeln!(result, "  📁 {dir}").unwrap();
     }
+    for file in files {
+        writeln!(result, "  📄 {file}").unwrap();
+    }
+    result
+}
 
-    // Key config files
+fn list_key_files(git_root: &Path) -> String {
     let key_files = [
         "README.md",
         "Cargo.toml",
@@ -997,19 +969,61 @@ async fn get_project_context_handler(arg: &str) -> Result<ToolOutput> {
         "docker-compose.yml",
         ".github/workflows",
     ];
-    let mut found_files = Vec::new();
+    let mut found = Vec::new();
     for kf in &key_files {
-        let full_path = git_root.join(kf);
-        if full_path.exists() {
-            found_files.push(kf.to_string());
+        if git_root.join(kf).exists() {
+            found.push(*kf);
         }
     }
-    if !found_files.is_empty() {
-        context.push_str("\nKey files:\n");
-        for f in found_files {
-            writeln!(context, "  - {f}").unwrap();
-        }
+    if found.is_empty() {
+        return String::new();
     }
+    let mut result = String::from("\nKey files:\n");
+    for f in found {
+        writeln!(result, "  - {f}").unwrap();
+    }
+    result
+}
+
+async fn get_project_context_handler(arg: &str) -> Result<ToolOutput> {
+    use std::fmt::Write;
+
+    let arg_trimmed = arg.trim();
+    let working_dir = if arg_trimmed.is_empty() {
+        std::env::current_dir()?
+    } else {
+        let path = Path::new(arg_trimmed);
+        if !path.exists() {
+            anyhow::bail!("Path does not exist: {arg_trimmed}");
+        }
+        if !path.is_dir() {
+            anyhow::bail!("Path is not a directory: {arg_trimmed}");
+        }
+        path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    };
+    let git_root = find_git_root(&working_dir).unwrap_or_else(|| working_dir.clone());
+    let display_git_root = to_relative_path(&git_root);
+
+    let mut context = String::new();
+    let project_type = detect_project_type(&git_root);
+    writeln!(context, "Project Type: {project_type}").unwrap();
+
+    let root_name = git_root.file_name().map_or_else(
+        || display_git_root.clone(),
+        |name| name.to_string_lossy().to_string(),
+    );
+    writeln!(context, "Project Root: {root_name}").unwrap();
+
+    if let Some(branch) = get_git_branch(&git_root).await {
+        writeln!(context, "Git Branch: {branch}").unwrap();
+    }
+
+    context.push_str("\nTop-level structure:\n");
+    let structure = list_top_level_structure(&git_root).await;
+    context.push_str(&structure);
+
+    let key_files_section = list_key_files(&git_root);
+    context.push_str(&key_files_section);
 
     let status = format!("Project context for {root_name}");
     Ok(ToolOutput::Text {

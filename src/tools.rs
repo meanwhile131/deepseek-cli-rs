@@ -927,10 +927,7 @@ async fn get_git_branch(git_root: &Path) -> Option<String> {
 
 async fn list_top_level_structure(git_root: &Path) -> String {
     let mut result = String::new();
-    let mut entries = match fs::read_dir(git_root).await {
-        Ok(e) => e,
-        Err(_) => return result,
-    };
+    let Ok(mut entries) = fs::read_dir(git_root).await else { return result };
     let mut dirs = Vec::new();
     let mut files = Vec::new();
     while let Ok(Some(entry)) = entries.next_entry().await {

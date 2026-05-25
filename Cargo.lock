@@ -800,6 +800,7 @@ dependencies = [
 [[package]]
 name = "deepseek-api"
 version = "0.3.1"
+source = "git+https://github.com/meanwhile131/deepseek-api-rs.git#94b5b35a2159ea9ce7fc4a3a21677645d4aa743a"
 dependencies = [
  "anyhow",
  "async-stream",

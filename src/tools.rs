@@ -14,7 +14,7 @@ use tokio::fs;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
-use std::io::Write;
+use std::fmt::Write;
 use std::process::Stdio;
 use tokio::sync::Mutex;
 use tokio::time::{Duration, timeout};
@@ -342,7 +342,7 @@ async fn read_command_output(
                     match line {
                         Ok(Some(l)) => {
                             println!("[stdout] {l}");
-                            let _ = std::io::stdout().flush();
+                            let _ = std::io::Write::flush(&mut std::io::stdout());
                             stdout_lines.push(l);
                         }
                         Ok(None) => { stdout_done = true; }
@@ -353,7 +353,7 @@ async fn read_command_output(
                     match line {
                         Ok(Some(l)) => {
                             eprintln!("[stderr] {l}");
-                            let _ = std::io::stderr().flush();
+                            let _ = std::io::Write::flush(&mut std::io::stderr());
                             stderr_lines.push(l);
                         }
                         Ok(None) => { stderr_done = true; }

@@ -36,5 +36,5 @@ jobs:
       uses: actions/upload-artifact@v7
       with:
         name: ${{ steps.bin.outputs.name }}-${{ matrix.os }}
-        path: target/release/${{ steps.bin.outputs.name }}${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+        path: target/release/${{ steps.bin.outputs.name }}${{ contains(matrix.os, 'windows') && '.exe' || '' }}
         if-no-files-found: error

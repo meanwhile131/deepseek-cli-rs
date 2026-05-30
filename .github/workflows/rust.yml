@@ -22,8 +22,8 @@ jobs:
     - name: Cache cargo dependencies
       uses: Swatinem/rust-cache@v2
     
-    - name: Build
-      run: cargo build --verbose --release
+    - name: Build with timings
+      run: cargo build --verbose --release --timings
     - name: Run tests
       run: cargo test --verbose --release
     - name: Get binary name
@@ -32,6 +32,13 @@ jobs:
       run: |
         BIN_NAME=$(cargo metadata --format-version=1 --no-deps | jq -r '.packages[0].targets[] | select(.kind[] | contains("bin")) | .name' | head -1)
         echo "name=${BIN_NAME}" >> $GITHUB_OUTPUT
+    - name: Upload build timings report
+      uses: actions/upload-artifact@v7
+      with:
+        name: build-timings-${{ matrix.os }}
+        path: target/cargo-timings/cargo-timing.html
+        if-no-files-found: warn
+        archive: false
     - name: Upload artifact
       uses: actions/upload-artifact@v7
       with:

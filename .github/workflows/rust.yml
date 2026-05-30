@@ -26,6 +26,10 @@ jobs:
       run: cargo build --verbose --release --timings
     - name: Run tests
       run: cargo test --verbose --release
+    - name: Rename timing report for distinct OS
+      shell: bash
+      run: |
+        cp target/cargo-timings/cargo-timing.html target/cargo-timings/cargo-timing-${{ matrix.os }}.html
     - name: Get binary name
       id: bin
       shell: bash
@@ -36,7 +40,7 @@ jobs:
       uses: actions/upload-artifact@v7
       with:
         name: build-timings-${{ matrix.os }}
-        path: target/cargo-timings/cargo-timing.html
+        path: target/cargo-timings/cargo-timing-${{ matrix.os }}.html
         if-no-files-found: warn
         archive: false
     - name: Upload artifact

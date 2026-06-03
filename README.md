@@ -1,5 +1,11 @@
 [![Build](https://github.com/meanwhile131/deepseek-cli-rs/actions/workflows/rust.yml/badge.svg)](https://github.com/meanwhile131/deepseek-cli-rs/actions/workflows/rust.yml)
 [![Clippy](https://github.com/meanwhile131/deepseek-cli-rs/actions/workflows/clippy.yml/badge.svg)](https://github.com/meanwhile131/deepseek-cli-rs/actions/workflows/clippy.yml)
+
+# Automatic install on Linux/MacOS
+```bash
+curl -fsSL https://raw.githubusercontent.com/meanwhile131/deepseek-cli-rs/main/install.sh | sh
+```
+
 # Builds
 ## x86
 - [Windows](https://nightly.link/meanwhile131/deepseek-cli-rs/workflows/rust/main/deepseek-windows-latest.zip)
